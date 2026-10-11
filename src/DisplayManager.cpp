@@ -38,8 +38,10 @@ void DisplayManager::render(PetState state, uint8_t frame) {
   if (!ready_) return;
   sprite_.fillSprite(kBackground);
   const bool happy = state == PetState::Happy;
+  const bool asleep = state == PetState::Sleep;
+  const bool curious = state == PetState::Curious;
   const int y = 6 + (frame ? 0 : 4);
-  const uint16_t body = happy ? 0xFEAC : 0xB6FF;
+  const uint16_t body = happy ? 0xFEAC : (asleep ? 0x9CDF : (curious ? 0x9FF3 : 0xB6FF));
   for (int row = 0; row < 16; ++row) {
     for (int col = 0; col < 16; ++col) {
       const char cell = kBody[row][col];
@@ -48,7 +50,7 @@ void DisplayManager::render(PetState state, uint8_t frame) {
     }
   }
   const int eyeY = y + 28;
-  if (happy || frame) {
+  if (happy || frame || asleep) {
     sprite_.fillRect(24, eyeY + 4, 12, 4, TFT_BLACK);
     sprite_.fillRect(48, eyeY + 4, 12, 4, TFT_BLACK);
     if (happy) {
@@ -59,7 +61,7 @@ void DisplayManager::render(PetState state, uint8_t frame) {
     sprite_.fillRect(28, eyeY, 4, 8, TFT_BLACK);
     sprite_.fillRect(52, eyeY, 4, 8, TFT_BLACK);
   }
-  sprite_.fillRect(36, y + 44, 12, 4, TFT_BLACK);
+  sprite_.fillRect(curious ? 40 : 36, y + 44, curious ? 4 : 12, 4, TFT_BLACK);
   if (happy) sprite_.fillRect(40, y + 48, 4, 4, TFT_BLACK);
   sprite_.pushSprite((lcd_.width() - kSpriteSize) / 2,
                      (lcd_.height() - kSpriteSize) / 2);

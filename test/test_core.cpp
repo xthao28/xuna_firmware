@@ -36,5 +36,7 @@ int main() {
   a.begin(0); a.update(0); assert(a.update(1000000400)); assert(a.frame() == 1);
   a.setState(PetState::Happy, UINT32_MAX - 1000); a.update(UINT32_MAX - 1000);
   assert(a.update(1399)); assert(a.state() == PetState::Idle);
+  a.setState(PetState::Sleep, 10);a.update(10000);assert(a.state()==PetState::Sleep);
+  a.setState(PetState::Curious, 10001);a.update(12401);assert(a.state()==PetState::Idle);
   std::cout << "PASS: debounce, hold/release, boot hold, rollover, frame timing, timeout, retrigger, idle, bounded catch-up\n";
 }

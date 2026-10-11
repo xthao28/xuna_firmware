@@ -1,7 +1,7 @@
 #pragma once
 #include <cstdint>
 namespace xuna {
-constexpr const char* kFirmwareVersion = "0.1.0-m01";
+constexpr const char* kFirmwareVersion = "0.2.0-mvp";
 constexpr uint8_t kPowerPin = 15;
 constexpr uint8_t kBacklightPin = 38;
 constexpr uint8_t kHappyButtonPin = 0;

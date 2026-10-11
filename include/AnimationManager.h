@@ -1,7 +1,7 @@
 #pragma once
 #include "AppConfig.h"
 namespace xuna {
-enum class PetState : uint8_t { Idle, Happy };
+enum class PetState : uint8_t { Idle, Happy, Sleep, Curious };
 class AnimationManager {
  public:
   void begin(uint32_t now) { setState(PetState::Idle, now); }
@@ -9,7 +9,7 @@ class AnimationManager {
     state_ = state; frame_ = 0; stateAt_ = frameAt_ = now; dirty_ = true;
   }
   bool update(uint32_t now) {
-    if (state_ == PetState::Happy && uint32_t(now - stateAt_) >= kHappyDurationMs)
+    if ((state_ == PetState::Happy || state_ == PetState::Curious) && uint32_t(now - stateAt_) >= kHappyDurationMs)
       setState(PetState::Idle, now);
     const uint32_t interval = state_ == PetState::Idle ? kIdleFrameMs : kHappyFrameMs;
     const uint32_t steps = uint32_t(now - frameAt_) / interval;
