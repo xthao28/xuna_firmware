@@ -1,0 +1,24 @@
+{
+  "source_size": [
+    1721,
+    914
+  ],
+  "scale": 0.18593840790238234,
+  "resized_size": [
+    320,
+    170
+  ],
+  "offset": [
+    0,
+    0
+  ],
+  "crop": false,
+  "source_sha256": "76fd464fa3d5faba63bd2f7b96091045a7194ac5b0f20958fa0d624f5b14852a",
+  "target_size": [
+    320,
+    170
+  ],
+  "pixel_bytes": 108800,
+  "format": "RGB565 canonical words; TFT_eSPI setSwapBytes(true)",
+  "resampling": "nearest-neighbor"
+}

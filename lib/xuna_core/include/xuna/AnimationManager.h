@@ -1,5 +1,5 @@
 #pragma once
-#include "AppConfig.h"
+#include <xuna/CoreConfig.h>
 namespace xuna {
 enum class PetState : uint8_t { Idle, Happy, Sleep, Curious };
 class AnimationManager {

@@ -1,5 +1,5 @@
 #pragma once
-#include "LifeEngine.h"
+#include <xuna/LifeEngine.h>
 namespace xuna {
 class LocalBehavior {
   uint32_t activityAt_=0;

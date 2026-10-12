@@ -4,8 +4,8 @@
 #include <BLE2902.h>
 #include <atomic>
 #include <cstring>
-#include "AnimationManager.h"
-#include "BleProtocol.h"
+#include <xuna/AnimationManager.h>
+#include <xuna/BleProtocol.h>
 #include "LifeStorage.h"
 namespace xuna {
 class BleManager {

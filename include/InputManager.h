@@ -1,5 +1,5 @@
 #pragma once
-#include "DebouncedButton.h"
+#include <xuna/DebouncedButton.h>
 namespace xuna {
 struct InputEvents { bool happy; bool idle; };
 class InputManager {

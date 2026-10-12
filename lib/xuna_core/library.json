@@ -1,0 +1,8 @@
+{
+  "name": "xuna_core",
+  "version": "0.1.0",
+  "description": "Hardware-independent XUNA life and interaction logic",
+  "build": {
+    "includeDir": "include"
+  }
+}

@@ -1,5 +1,5 @@
 #pragma once
-#include "AppConfig.h"
+#include <xuna/CoreConfig.h>
 namespace xuna {
 // Active-low conversion belongs to the GPIO adapter. All time math wraps safely.
 class DebouncedButton {

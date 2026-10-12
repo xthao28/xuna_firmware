@@ -1,3 +1,4 @@
+#include "BoardConfig.h"
 #include <Arduino.h>
 #include "InputManager.h"
 namespace xuna {

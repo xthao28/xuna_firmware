@@ -1,0 +1,4 @@
+{
+  "lcd": [320,170], "sprite": [96,72], "anchor": [112,72],
+  "palette": {"wall":"#393342","floor":"#776487","floor_shadow":"#584B67","olive":"#929D5A","olive_shadow":"#66723E","pet":"#D87949","pet_shadow":"#AC5336","cream":"#E6D8BC","outline":"#211E29"}
+}

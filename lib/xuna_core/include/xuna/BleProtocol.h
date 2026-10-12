@@ -1,7 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <cstddef>
-#include "LifeEngine.h"
+#include <xuna/LifeEngine.h>
 namespace xuna {
 struct BleCommand { uint32_t id=0, target=0; uint8_t opcode=0,arg=0,source=0,error=0; };
 inline BleCommand parseCommand(const uint8_t* b,size_t n) {
