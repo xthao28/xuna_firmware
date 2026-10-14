@@ -4,6 +4,7 @@
 #include <xuna/learning/LearningShadow.h>
 #include <xuna/learning/LearningTrace.h>
 #include <xuna/learning/LearningExplanation.h>
+#include <xuna/learning/LearningTraceDsl.h>
 #include <xuna/learning/PreferenceLearnerV2.h>
 
 using namespace xuna;
@@ -258,6 +259,94 @@ void explanation_rejects_invalid_decision() {
   TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(LearningReason::Invalid),
                           static_cast<uint8_t>(explanation.reason));
 }
+void trace_dsl_parses_learning_events() {
+  const LearningTraceParseResult choose =
+      LearningTraceDslParser::parse("@+10 choose 42 1 # play context");
+  TEST_ASSERT_TRUE(choose.accepted);
+  TEST_ASSERT_EQUAL_UINT32(10, choose.command.atMs);
+  TEST_ASSERT_EQUAL_UINT32(42, choose.command.value0);
+  TEST_ASSERT_EQUAL_UINT32(1, choose.command.value1);
+  LearningTraceEvent chooseEvent;
+  TEST_ASSERT_TRUE(LearningTraceDslParser::toLearningEvent(
+      choose.command, chooseEvent));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(LearningTraceKind::Choose),
+                          static_cast<uint8_t>(chooseEvent.kind));
+
+  const LearningTraceParseResult feedback =
+      LearningTraceDslParser::parse("@+20 feedback 42 positive 2");
+  TEST_ASSERT_TRUE(feedback.accepted);
+  TEST_ASSERT_TRUE(feedback.command.flag);
+  LearningTraceEvent feedbackEvent;
+  TEST_ASSERT_TRUE(LearningTraceDslParser::toLearningEvent(
+      feedback.command, feedbackEvent));
+  TEST_ASSERT_TRUE(feedbackEvent.approved);
+  TEST_ASSERT_EQUAL_UINT8(2, feedbackEvent.source);
+}
+
+void trace_dsl_parses_extended_commands() {
+  const LearningTraceParseResult command =
+      LearningTraceDslParser::parse("@+3 cmd 0x1a2b");
+  TEST_ASSERT_TRUE(command.accepted);
+  TEST_ASSERT_EQUAL_UINT32(0x1a2b, command.command.value0);
+
+  const LearningTraceParseResult sync =
+      LearningTraceDslParser::parse("@+4 sync 12345 -420");
+  TEST_ASSERT_TRUE(sync.accepted);
+  TEST_ASSERT_EQUAL_INT32(-420, sync.command.signedValue);
+
+  const LearningTraceParseResult expect =
+      LearningTraceDslParser::parse("@+5 expect learner.margin >= 10");
+  TEST_ASSERT_TRUE(expect.accepted);
+  TEST_ASSERT_EQUAL_STRING("learner.margin", expect.command.text);
+  TEST_ASSERT_EQUAL_STRING(">=", expect.command.op);
+  TEST_ASSERT_EQUAL_UINT32(10, expect.command.value0);
+}
+
+void trace_dsl_rejects_malformed_lines() {
+  const LearningTraceParseResult missingPrefix =
+      LearningTraceDslParser::parse("choose 1 0");
+  TEST_ASSERT_FALSE(missingPrefix.accepted);
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(LearningTraceParseError::MissingPrefix),
+      static_cast<uint8_t>(missingPrefix.error));
+
+  const LearningTraceParseResult unknown =
+      LearningTraceDslParser::parse("@+1 dance 1");
+  TEST_ASSERT_FALSE(unknown.accepted);
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(LearningTraceParseError::UnknownVerb),
+      static_cast<uint8_t>(unknown.error));
+
+  const LearningTraceParseResult trailing =
+      LearningTraceDslParser::parse("@+1 reboot now");
+  TEST_ASSERT_FALSE(trailing.accepted);
+  TEST_ASSERT_EQUAL_UINT8(
+      static_cast<uint8_t>(LearningTraceParseError::TrailingArgument),
+      static_cast<uint8_t>(trailing.error));
+
+  const LearningTraceParseResult comment =
+      LearningTraceDslParser::parse("  # comment only");
+  TEST_ASSERT_FALSE(comment.accepted);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(LearningTraceParseError::Ignored),
+                          static_cast<uint8_t>(comment.error));
+}
+
+void trace_dsl_events_replay_through_runner() {
+  const LearningTraceParseResult choose =
+      LearningTraceDslParser::parse("@+10 choose 7 0");
+  const LearningTraceParseResult feedback =
+      LearningTraceDslParser::parse("@+20 feedback 7 approved 1");
+  LearningTraceEvent events[2];
+  TEST_ASSERT_TRUE(LearningTraceDslParser::toLearningEvent(choose.command,
+                                                            events[0]));
+  TEST_ASSERT_TRUE(LearningTraceDslParser::toLearningEvent(feedback.command,
+                                                            events[1]));
+  LearningTraceRunner runner;
+  LearningTraceReport report;
+  TEST_ASSERT_TRUE(runner.run(events, 2, report, 12, 15));
+  TEST_ASSERT_EQUAL_UINT32(1, report.shadow.feedbackAccepted);
+  TEST_ASSERT_EQUAL_UINT32(1, report.evaluation.samples);
+}
 void setUp() {}
 void tearDown() {}
 int main() {
@@ -276,5 +365,9 @@ int main() {
   RUN_TEST(explanation_reports_exploration_and_cells);
   RUN_TEST(explanation_reports_posterior_winner);
   RUN_TEST(explanation_rejects_invalid_decision);
+  RUN_TEST(trace_dsl_parses_learning_events);
+  RUN_TEST(trace_dsl_parses_extended_commands);
+  RUN_TEST(trace_dsl_rejects_malformed_lines);
+  RUN_TEST(trace_dsl_events_replay_through_runner);
   return UNITY_END();
 }
