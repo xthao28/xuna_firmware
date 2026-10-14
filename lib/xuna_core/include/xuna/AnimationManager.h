@@ -1,10 +1,25 @@
 #pragma once
 #include <xuna/CoreConfig.h>
+#include <xuna/visual/VisualIntent.h>
 namespace xuna {
 enum class PetState : uint8_t { Idle, Happy, Sleep, Curious };
 class AnimationManager {
  public:
   void begin(uint32_t now) { setState(PetState::Idle, now); }
+  void setIntent(VisualIntent intent, uint8_t stage, uint32_t now) {
+    const ExpressionResolution resolved = resolveVisualIntent(intent, stage);
+    switch (resolved.resolved) {
+      case VisualIntent::Happy:
+      case VisualIntent::Celebrate: setState(PetState::Happy, now); break;
+      case VisualIntent::Sleep:
+      case VisualIntent::Rest:
+      case VisualIntent::ErrorSafe: setState(PetState::Sleep, now); break;
+      case VisualIntent::Curious:
+      case VisualIntent::Greet: setState(PetState::Curious, now); break;
+      case VisualIntent::Idle:
+      case VisualIntent::Unknown: setState(PetState::Idle, now); break;
+    }
+  }
   void setState(PetState state, uint32_t now) {
     state_ = state; frame_ = 0; stateAt_ = frameAt_ = now; dirty_ = true;
   }

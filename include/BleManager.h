@@ -6,6 +6,8 @@
 #include <cstring>
 #include <xuna/AnimationManager.h>
 #include <xuna/BleProtocol.h>
+#include <xuna/life/ActivityFsm.h>
+#include <xuna/life/RequestValidator.h>
 #include "LifeStorage.h"
 namespace xuna {
 class BleManager {
@@ -18,6 +20,8 @@ class BleManager {
   std::atomic<uint32_t> session_{0};
   uint32_t seenSession_=0,sequence_=0,decision_=0,activityAt_=0;
   uint8_t context_=0,action_=0,lastState_=255;
+  uint8_t acceptedMask_=0;
+  uint32_t lastAcceptedAt_[4]={};
   bool feedbackUsed_=true,advertising_=true;
   CommandCache cache_;
   uint8_t lastLife_[20]={},lastMemories_[2][20]={};
@@ -52,6 +56,61 @@ class BleManager {
     LifeEngine::put32(b+8,sequence_);LifeEngine::put32(b+12,now);status_->setValue(b,sizeof(b));
     if(connected_)status_->notify();
   }
+  static uint8_t validationResult(ValidationReason reason) {
+    switch(reason) {
+      case ValidationReason::Accepted: return 0;
+      case ValidationReason::Busy:
+      case ValidationReason::Activity:
+      case ValidationReason::Cooldown:
+      case ValidationReason::Energy:
+      case ValidationReason::Permission:
+      case ValidationReason::Stage: return 5;
+      case ValidationReason::UnknownAction:
+      case ValidationReason::InvalidParameter:
+      case ValidationReason::InvalidContext: return 4;
+    }
+    return 4;
+  }
+  bool requestAction(uint8_t id,AnimationManager& animation,ActivityFsm& activity,
+                     Needs& needs,uint32_t now,uint8_t& result) {
+    ValidatorContext context;
+    context.activity=activity.state(); context.energy=needs.state().energy;
+    context.now=now; context.acceptedMask=acceptedMask_;
+    for(uint8_t i=0;i<4;++i) context.lastAcceptedAt[i]=lastAcceptedAt_[i];
+    const ActionRequest request{id,0};
+    ValidationResult validation=RequestValidator::validate(request,context);
+    bool wake=false;
+    bool routeThroughIdle=false;
+    if(!validation.allowed && activity.state()==Activity::Sleeping && id!=static_cast<uint8_t>(ActionId::Sleep)) {
+      context.activity=Activity::Idle;
+      validation=RequestValidator::validate(request,context);
+      wake=validation.allowed;
+    }
+    if(!validation.allowed && id==static_cast<uint8_t>(ActionId::Sleep) &&
+       activity.state()!=Activity::Idle && activity.state()!=Activity::Sleeping) {
+      context.activity=Activity::Idle;
+      validation=RequestValidator::validate(request,context);
+      routeThroughIdle=validation.allowed;
+    }
+    if(!validation.allowed){result=validationResult(validation.reason);return false;}
+    ActivityGuards guards; guards.energy=needs.state().energy; guards.restoreOk=true; guards.explicitWake=true;
+    if(wake && activity.state()==Activity::Sleeping) {
+      const auto wakeResult=activity.request(Activity::Idle,guards,now);
+      if(!wakeResult.ok){result=5;return false;}
+    }
+    if(routeThroughIdle && activity.state()!=Activity::Idle) {
+      const auto idleResult=activity.request(Activity::Idle,guards,now);
+      if(!idleResult.ok){result=5;return false;}
+    }
+    if(activity.state()!=validation.target) {
+      const auto transition=activity.request(validation.target,guards,now);
+      if(!transition.ok){result=5;return false;}
+    }
+    animation.setIntent(validation.visual,0,now);
+    const uint8_t index=static_cast<uint8_t>(validation.action);
+    if(index<4){acceptedMask_|=uint8_t(1u<<index);lastAcceptedAt_[index]=now;}
+    result=0;return true;
+  }
  public:
   bool begin() {
     queue_=xQueueCreate(8,sizeof(Packet));if(!queue_)return false;
@@ -67,7 +126,15 @@ class BleManager {
     publish(0,0,0,PetState::Idle,0);service->start();
     auto* adv=BLEDevice::getAdvertising();adv->addServiceUUID(kService);adv->setScanResponse(true);adv->start();return true;
   }
-  void update(AnimationManager& animation,LifeEngine& life,LifeStorage& storage,uint32_t now,bool ready) {
+  bool requestLocalAction(AnimationManager& animation,ActivityFsm& activity,Needs& needs,
+                          ActionId action,uint32_t now) {
+    uint8_t result=0;
+    const bool accepted=requestAction(static_cast<uint8_t>(action),animation,activity,needs,now,result);
+    if(accepted) { invalidateDecision(); activityAt_=now; }
+    return accepted;
+  }
+  void update(AnimationManager& animation,LifeEngine& life,LifeStorage& storage,
+              ActivityFsm& activity,Needs& needs,uint32_t now,bool ready) {
     const auto session=session_.load();
     if(session!=seenSession_){cache_.clear();decision_=0;feedbackUsed_=true;seenSession_=session;}
     if(connected_)advertising_=false;
@@ -80,9 +147,15 @@ class BleManager {
       else {
         if(!result&&!ready)result=7;
         if(!result){
-          if(c.opcode==1||c.opcode==2)activityAt_=now;
-          if(c.opcode==1){invalidateDecision();animation.setState(static_cast<PetState>(c.arg),now);}
-          if(c.opcode==2){context_=c.arg;action_=life.choose(context_);decision_=c.id;feedbackUsed_=false;animation.setState(static_cast<PetState>(action_),now);}
+          if(c.opcode==1){
+            if(requestAction(c.arg,animation,activity,needs,now,result)) { invalidateDecision(); activityAt_=now; }
+          }
+          if(c.opcode==2){
+            context_=c.arg; const uint8_t selected=life.choose(context_);
+            if(requestAction(selected,animation,activity,needs,now,result)) {
+              action_=selected; decision_=c.id; feedbackUsed_=false; activityAt_=now;
+            }
+          }
           if(c.opcode==3){
             if(c.target!=decision_||feedbackUsed_)result=4;
             else {LifeEngine candidate=life;candidate.feedback(context_,action_,c.arg==1,c.source);if(storage.save(candidate)){life=candidate;feedbackUsed_=true;}else result=7;}
