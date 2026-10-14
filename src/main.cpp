@@ -75,7 +75,8 @@ void loop() {
   if (gap > maxLoopGapUs) maxLoopGapUs = gap;
   lastLoopUs = loopUs;
   const uint32_t now = millis();
-  needs.update(now);
+  // The activity held since the previous loop decides decay versus recovery.
+  needs.update(now, xuna::ActivityFsm::recoversEnergy(activity.state()));
   xuna::ActivityGuards tickGuards; tickGuards.energy=needs.state().energy; tickGuards.restoreOk=true;
   if (activity.tick(now,tickGuards)) syncActivityVisual(now);
   if (bleReady) {

@@ -6,8 +6,7 @@
 #include <cstring>
 #include <xuna/AnimationManager.h>
 #include <xuna/BleProtocol.h>
-#include <xuna/life/ActivityFsm.h>
-#include <xuna/life/RequestValidator.h>
+#include <xuna/life/ActionGate.h>
 #include "LifeStorage.h"
 namespace xuna {
 class BleManager {
@@ -20,8 +19,7 @@ class BleManager {
   std::atomic<uint32_t> session_{0};
   uint32_t seenSession_=0,sequence_=0,decision_=0,activityAt_=0;
   uint8_t context_=0,action_=0,lastState_=255;
-  uint8_t acceptedMask_=0;
-  uint32_t lastAcceptedAt_[4]={};
+  ActionGate gate_;
   bool feedbackUsed_=true,advertising_=true;
   CommandCache cache_;
   uint8_t lastLife_[20]={},lastMemories_[2][20]={};
@@ -73,42 +71,10 @@ class BleManager {
   }
   bool requestAction(uint8_t id,AnimationManager& animation,ActivityFsm& activity,
                      Needs& needs,uint32_t now,uint8_t& result) {
-    ValidatorContext context;
-    context.activity=activity.state(); context.energy=needs.state().energy;
-    context.now=now; context.acceptedMask=acceptedMask_;
-    for(uint8_t i=0;i<4;++i) context.lastAcceptedAt[i]=lastAcceptedAt_[i];
-    const ActionRequest request{id,0};
-    ValidationResult validation=RequestValidator::validate(request,context);
-    bool wake=false;
-    bool routeThroughIdle=false;
-    if(!validation.allowed && activity.state()==Activity::Sleeping && id!=static_cast<uint8_t>(ActionId::Sleep)) {
-      context.activity=Activity::Idle;
-      validation=RequestValidator::validate(request,context);
-      wake=validation.allowed;
-    }
-    if(!validation.allowed && id==static_cast<uint8_t>(ActionId::Sleep) &&
-       activity.state()!=Activity::Idle && activity.state()!=Activity::Sleeping) {
-      context.activity=Activity::Idle;
-      validation=RequestValidator::validate(request,context);
-      routeThroughIdle=validation.allowed;
-    }
-    if(!validation.allowed){result=validationResult(validation.reason);return false;}
-    ActivityGuards guards; guards.energy=needs.state().energy; guards.restoreOk=true; guards.explicitWake=true;
-    if(wake && activity.state()==Activity::Sleeping) {
-      const auto wakeResult=activity.request(Activity::Idle,guards,now);
-      if(!wakeResult.ok){result=5;return false;}
-    }
-    if(routeThroughIdle && activity.state()!=Activity::Idle) {
-      const auto idleResult=activity.request(Activity::Idle,guards,now);
-      if(!idleResult.ok){result=5;return false;}
-    }
-    if(activity.state()!=validation.target) {
-      const auto transition=activity.request(validation.target,guards,now);
-      if(!transition.ok){result=5;return false;}
-    }
-    animation.setIntent(validation.visual,0,now);
-    const uint8_t index=static_cast<uint8_t>(validation.action);
-    if(index<4){acceptedMask_|=uint8_t(1u<<index);lastAcceptedAt_[index]=now;}
+    const ActionOutcome outcome=gate_.request(id,0,activity,needs.state().energy,now);
+    // A validator pass refused by an FSM guard is reported as busy (5).
+    if(!outcome.accepted){result=outcome.reason==ValidationReason::Accepted?5:validationResult(outcome.reason);return false;}
+    animation.setIntent(outcome.visual,0,now);
     result=0;return true;
   }
  public:
@@ -151,9 +117,11 @@ class BleManager {
             if(requestAction(c.arg,animation,activity,needs,now,result)) { invalidateDecision(); activityAt_=now; }
           }
           if(c.opcode==2){
-            context_=c.arg; const uint8_t selected=life.choose(context_);
+            const uint8_t selected=life.choose(c.arg);
+            // Commit context with the decision only: a rejected choice must not
+            // retarget feedback for the previous accepted decision.
             if(requestAction(selected,animation,activity,needs,now,result)) {
-              action_=selected; decision_=c.id; feedbackUsed_=false; activityAt_=now;
+              context_=c.arg; action_=selected; decision_=c.id; feedbackUsed_=false; activityAt_=now;
             }
           }
           if(c.opcode==3){

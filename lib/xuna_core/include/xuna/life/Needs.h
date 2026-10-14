@@ -12,6 +12,9 @@ struct LifeTuning {
   uint16_t initialStimulation = 0;
   uint16_t energyDecayPerMinute = 1024;
   uint16_t stimulationDecayPerMinute = 2048;
+  // Applied instead of energy decay while the caller reports recovery
+  // (Resting/Sleeping). Placeholder: about four minutes of Resting.
+  uint16_t energyRecoveryPerMinute = 2048;
   uint32_t decayPeriodMs = 60000;
 };
 
@@ -32,17 +35,24 @@ class Needs {
     state_.stimulation = tuning_.initialStimulation;
     lastMonoMs_ = now;
     energyRemainder_ = 0;
+    recoveryRemainder_ = 0;
     stimulationRemainder_ = 0;
   }
 
-  // Applies a closed-form linear decay. Remainders make split updates exactly
+  // Applies a closed-form linear change. Remainders make split updates exactly
   // equivalent to one catch-up update, including across one uint32_t wrap.
-  void update(uint32_t now) {
+  // `recovering` describes the whole elapsed interval: callers pass the state
+  // that held since the previous update, so energy rises instead of decaying.
+  void update(uint32_t now, bool recovering = false) {
     const uint32_t elapsed = now - lastMonoMs_;
     lastMonoMs_ = now;
     if (!elapsed || !tuning_.decayPeriodMs) return;
-    decay(state_.energy, tuning_.energyDecayPerMinute, elapsed,
-          energyRemainder_);
+    if (recovering)
+      recover(state_.energy, tuning_.energyRecoveryPerMinute, elapsed,
+              recoveryRemainder_);
+    else
+      decay(state_.energy, tuning_.energyDecayPerMinute, elapsed,
+            energyRemainder_);
     decay(state_.stimulation, tuning_.stimulationDecayPerMinute, elapsed,
           stimulationRemainder_);
   }
@@ -61,10 +71,20 @@ class Needs {
     value = amount >= value ? 0 : static_cast<uint16_t>(value - amount);
   }
 
+  void recover(uint16_t& value, uint16_t rate, uint32_t elapsed,
+               uint32_t& remainder) const {
+    const uint64_t work = uint64_t(rate) * elapsed + remainder;
+    const uint64_t amount = work / tuning_.decayPeriodMs;
+    remainder = static_cast<uint32_t>(work % tuning_.decayPeriodMs);
+    const uint32_t room = 65535U - value;
+    value = amount >= room ? 65535 : static_cast<uint16_t>(value + amount);
+  }
+
   LifeTuning tuning_;
   NeedsState state_;
   uint32_t lastMonoMs_ = 0;
   uint32_t energyRemainder_ = 0;
+  uint32_t recoveryRemainder_ = 0;
   uint32_t stimulationRemainder_ = 0;
 };
 

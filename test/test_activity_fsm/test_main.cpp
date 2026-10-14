@@ -42,23 +42,21 @@ bool expectedLegal(Activity from, Activity to) {
   return false;
 }
 
+// Starts a fresh FSM and drives it to `state` through legal transitions only.
 void enter(ActivityFsm& fsm, Activity state, MonoMs now = 100) {
+  fsm = ActivityFsm();
   ActivityGuards g = ready();
-  if (state == Activity::Idle) {
-    TEST_ASSERT_TRUE(fsm.request(Activity::Idle, g, now).ok);
+  if (state == Activity::Booting) return;
+  if (state == Activity::ErrorSafe) {
+    g.restoreOk = false;
+    TEST_ASSERT_TRUE(fsm.request(Activity::ErrorSafe, g, now).ok);
     return;
   }
   TEST_ASSERT_TRUE(fsm.request(Activity::Idle, g, now).ok);
-  if (state == Activity::ErrorSafe) {
-    g.restoreOk = false;
-  } else if (state == Activity::Playing) {
-    g.energy = ActivityFsm::kPlayMin;
-  } else if (state == Activity::Resting) {
-    g.energy = ActivityFsm::kRestThreshold - 1;
-  } else if (state == Activity::EvolutionTransition) {
-    g.evolutionReady = true;
-  }
+  if (state == Activity::Idle) return;
+  if (state == Activity::Resting) g.energy = ActivityFsm::kRestThreshold - 1;
   TEST_ASSERT_TRUE(fsm.request(state, g, now).ok);
+  TEST_ASSERT_EQUAL(state, fsm.state());
 }
 }  // namespace
 
@@ -69,9 +67,15 @@ void exhaustive_pairs() {
       ActivityGuards g = ready();
       enter(fsm, static_cast<Activity>(from));
       const TransitionResult result = fsm.request(static_cast<Activity>(to), g, 200);
-      if (!expectedLegal(static_cast<Activity>(from), static_cast<Activity>(to))) {
+      const bool legal =
+          expectedLegal(static_cast<Activity>(from), static_cast<Activity>(to));
+      TEST_ASSERT_EQUAL(legal, ActivityFsm::legal(static_cast<Activity>(from),
+                                                  static_cast<Activity>(to)));
+      if (!legal) {
         TEST_ASSERT_FALSE(result.ok);
         TEST_ASSERT_EQUAL(TransitionReason::Illegal, result.reason);
+      } else {
+        TEST_ASSERT_NOT_EQUAL(TransitionReason::Illegal, result.reason);
       }
     }
   }
@@ -80,6 +84,7 @@ void exhaustive_pairs() {
 void guards_and_reasons() {
   ActivityFsm fsm;
   ActivityGuards g = ready();
+  g.restoreOk = false;
   TEST_ASSERT_EQUAL(TransitionReason::GuardRestore,
                     fsm.request(Activity::Idle, g, 0).reason);
   g.restoreOk = true;
@@ -146,6 +151,8 @@ void guarded_exits() {
   g.reboot = false;
   TEST_ASSERT_EQUAL(TransitionReason::Illegal,
                     fsm.request(Activity::Idle, g, 400).reason);
+  TEST_ASSERT_EQUAL(TransitionReason::GuardReboot,
+                    fsm.request(Activity::Booting, g, 400).reason);
   g.reboot = true;
   TEST_ASSERT_TRUE(fsm.request(Activity::Booting, g, 401).ok);
 }

@@ -132,7 +132,7 @@ class ActivityFsm {
         break;
       case Activity::Booting:
         if (from == Activity::ErrorSafe && !guards.reboot) {
-          result.reason = TransitionReason::Busy;
+          result.reason = TransitionReason::GuardReboot;
           return result;
         }
         break;
@@ -214,6 +214,12 @@ class ActivityFsm {
       case Activity::ErrorSafe: return 0;
     }
     return 0;
+  }
+
+  // Proposed M04 rule: energy recovers only while the pet is resting or asleep.
+  // Without recovery, Resting (exit at kRestExit) would never be released.
+  static bool recoversEnergy(Activity state) {
+    return state == Activity::Resting || state == Activity::Sleeping;
   }
 
   static bool legal(Activity from, Activity to) {

@@ -24,6 +24,18 @@ struct BehaviorCandidate {
   uint16_t energyCost = 0;
   bool allowed = true;
   bool cooldownReady = true;
+
+  // C++11 member initializers make this a non-aggregate; keep brace tables.
+  BehaviorCandidate(ActionId actionValue = ActionId::Idle,
+                    uint16_t noveltyValue = 0, int16_t biasValue = 0,
+                    uint16_t energyCostValue = 0, bool allowedValue = true,
+                    bool cooldownReadyValue = true)
+      : action(actionValue),
+        novelty(noveltyValue),
+        bias(biasValue),
+        energyCost(energyCostValue),
+        allowed(allowedValue),
+        cooldownReady(cooldownReadyValue) {}
 };
 
 struct SelectionResult {

@@ -4,9 +4,9 @@
 
 #include <xuna/LifeEngine.h>
 #include <xuna/base/Random.h>
+#include <xuna/life/ActionGate.h>
 #include <xuna/life/ActivityFsm.h>
 #include <xuna/life/Needs.h>
-#include <xuna/life/RequestValidator.h>
 #include <xuna/learning/LearningBridge.h>
 #include <xuna/visual/VisualIntent.h>
 
@@ -83,8 +83,7 @@ class LifeCore {
     mood_.reset();
     candidate_.reset();
     pendingValid_ = false;
-    acceptedMask_ = 0;
-    for (uint8_t i = 0; i < 4; ++i) lastAcceptedAt_[i] = 0;
+    gate_.reset();
     lastVisual_ = VisualIntent::Unknown;
     activity_ = ActivityFsm();
     ActivityGuards guards;
@@ -106,7 +105,7 @@ class LifeCore {
       return output;
     }
 
-    needs_.update(input.now);
+    needs_.update(input.now, ActivityFsm::recoversEnergy(activity_.state()));
     MoodSignals signals;
     ActivityGuards guards;
     guards.energy = needs_.state().energy;
@@ -120,6 +119,10 @@ class LifeCore {
       process(input.events[i], input.now, signals, output);
     }
     mood_.update(needs_.state(), signals);
+    // An action visual lasts only while its activity does (e.g. Reacting
+    // timing out to Idle falls back to the activity visual).
+    if (activity_.state() != lastVisualActivity_)
+      lastVisual_ = VisualIntent::Unknown;
 
     output.started = started_;
     output.activity = activity_.state();
@@ -154,14 +157,16 @@ class LifeCore {
         if (output.actionAccepted) signals.interaction = true;
         return;
       case LifeCoreEventKind::Choose: {
-        pending_ = bridge_.choose(event.context, event.id, now);
-        pendingValid_ = pending_.candidate.id != 0;
-        if (!pendingValid_) return;
-        output.selectedAction = pending_.baselineAction;
-        output.actionAccepted = requestAction(pending_.baselineAction, 0, now);
-        output.baselineAction = pending_.baselineAction;
-        output.candidateAction = pending_.candidate.action;
-        output.decisionId = pending_.id;
+        const LearningBridgeDecision decision =
+            bridge_.choose(event.context, event.id, now);
+        if (decision.candidate.id == 0) return;
+        output.selectedAction = decision.baselineAction;
+        output.actionAccepted = requestAction(decision.baselineAction, 0, now);
+        // Matches the BLE adapter: only a shown action can receive feedback;
+        // a rejected choice keeps the previous accepted decision pending.
+        if (!output.actionAccepted) return;
+        pending_ = decision;
+        pendingValid_ = true;
         return;
       }
       case LifeCoreEventKind::Feedback:
@@ -178,31 +183,11 @@ class LifeCore {
   }
 
   bool requestAction(uint8_t action, int16_t parameter, MonoMs now) {
-    ValidatorContext context;
-    context.activity = activity_.state();
-    context.energy = needs_.state().energy;
-    context.now = now;
-    context.acceptedMask = acceptedMask_;
-    for (uint8_t i = 0; i < 4; ++i)
-      context.lastAcceptedAt[i] = lastAcceptedAt_[i];
-    const ValidationResult validation =
-        RequestValidator::validate(ActionRequest(action, parameter), context);
-    if (!validation.allowed) return false;
-
-    ActivityGuards guards;
-    guards.energy = needs_.state().energy;
-    guards.restoreOk = true;
-    guards.explicitWake = true;
-    if (activity_.state() != validation.target &&
-        !activity_.request(validation.target, guards, now).ok)
-      return false;
-
-    const uint8_t index = static_cast<uint8_t>(validation.action);
-    if (index < 4) {
-      acceptedMask_ |= static_cast<uint8_t>(1U << index);
-      lastAcceptedAt_[index] = now;
-    }
-    lastVisual_ = validation.visual;
+    const ActionOutcome outcome = gate_.request(
+        action, parameter, activity_, needs_.state().energy, now);
+    if (!outcome.accepted) return false;
+    lastVisual_ = outcome.visual;
+    lastVisualActivity_ = activity_.state();
     return true;
   }
 
@@ -231,9 +216,9 @@ class LifeCore {
   Mood mood_;
   LearningBridgeDecision pending_;
   bool pendingValid_ = false;
-  uint8_t acceptedMask_ = 0;
-  uint32_t lastAcceptedAt_[4] = {};
+  ActionGate gate_;
   VisualIntent lastVisual_ = VisualIntent::Unknown;
+  Activity lastVisualActivity_ = Activity::Booting;
 };
 
 }  // namespace xuna

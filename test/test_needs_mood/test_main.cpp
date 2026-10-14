@@ -20,6 +20,7 @@ void catch_up_is_partition_invariant() {
   gap.update(180000);
   pieces.update(60000);
   pieces.update(120000);
+  pieces.update(180000);
   TEST_ASSERT_EQUAL_UINT16(gap.state().energy, pieces.state().energy);
   TEST_ASSERT_EQUAL_UINT16(gap.state().stimulation, pieces.state().stimulation);
 }
@@ -52,6 +53,38 @@ void decay_clamps_and_wraps() {
   TEST_ASSERT_EQUAL_UINT16(0, needs.state().energy);
   TEST_ASSERT_EQUAL_UINT16(0, needs.state().stimulation);
   TEST_ASSERT_EQUAL_UINT16(0, needs.energy().raw());
+}
+
+void recovery_rises_clamps_and_is_partition_invariant() {
+  LifeTuning tuning;
+  tuning.initialEnergy = 10000;
+  tuning.initialStimulation = 50000;
+  tuning.energyRecoveryPerMinute = 6000;
+  tuning.stimulationDecayPerMinute = 3000;
+  Needs gap(tuning), pieces(tuning);
+  gap.update(180000, true);
+  pieces.update(45000, true);
+  pieces.update(100001, true);
+  pieces.update(180000, true);
+  TEST_ASSERT_EQUAL_UINT16(28000, gap.state().energy);
+  TEST_ASSERT_EQUAL_UINT16(gap.state().energy, pieces.state().energy);
+  // Stimulation keeps decaying while energy recovers.
+  TEST_ASSERT_EQUAL_UINT16(41000, gap.state().stimulation);
+  TEST_ASSERT_EQUAL_UINT16(gap.state().stimulation, pieces.state().stimulation);
+
+  tuning.initialEnergy = 65000;
+  Needs full(tuning);
+  full.reset(UINT32_MAX - 100);
+  full.update(600000, true);
+  TEST_ASSERT_EQUAL_UINT16(65535, full.state().energy);
+
+  // Switching back to decay uses the decay rate from the switch point.
+  tuning.initialEnergy = 30000;
+  tuning.energyDecayPerMinute = 1200;
+  Needs mixed(tuning);
+  mixed.update(60000, true);
+  mixed.update(120000, false);
+  TEST_ASSERT_EQUAL_UINT16(30000 + 6000 - 1200, mixed.state().energy);
 }
 
 void mood_hysteresis() {
@@ -109,6 +142,7 @@ int main() {
   RUN_TEST(catch_up_is_partition_invariant);
   RUN_TEST(cold_boot_has_no_offline_catch_up);
   RUN_TEST(decay_clamps_and_wraps);
+  RUN_TEST(recovery_rises_clamps_and_is_partition_invariant);
   RUN_TEST(mood_hysteresis);
   RUN_TEST(mood_axes_clamp);
   return UNITY_END();

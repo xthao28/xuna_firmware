@@ -86,7 +86,8 @@ class LearningTraceRunner {
         continue;
       }
       if (event.source < 1 || event.source > 2) {
-        shadow.feedback(*slot, event.approved, event.source, event.at);
+        // Counted as rejected by the shadow; never scored or applied.
+        shadow.feedback(slot->decision, event.approved, event.source, event.at);
         continue;
       }
       if (!slot->feedbackApplied &&
