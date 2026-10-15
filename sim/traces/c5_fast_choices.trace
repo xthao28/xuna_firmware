@@ -1,0 +1,7 @@
+# lifecore_lab: three choices 100 ms apart. Only the latest accepted decision can take feedback: feedback_applied 1.
+@+5000 choose 1 1
+@+5100 choose 2 1
+@+5200 choose 3 1
+@+5300 feedback 1 positive 1
+@+5400 feedback 2 positive 1
+@+5500 feedback 3 positive 1

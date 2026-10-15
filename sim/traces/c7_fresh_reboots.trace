@@ -1,0 +1,6 @@
+# lifecore_lab: reboots with no committed slot; reserved verbs counted unsupported. Expect reboots 2, unsupported 3.
+@+1000 reboot
+@+2000 reboot
+@+3000 day 1
+@+4000 sync 0 0
+@+5000 expect events >= 0

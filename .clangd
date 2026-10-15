@@ -1,0 +1,20 @@
+# clangd setup for editors (not used by the build).
+# src/, include/, lib/: generate compile_commands.json with
+#   pio run -e xuna_t_display_s3 -t compiledb
+# and start clangd with --query-driver=<xtensa-esp32s3 toolchain>/bin/*.
+CompileFlags:
+  Add: [-Ilib/xuna_core/include]
+  Remove: [-mlongcalls, -fstrict-volatile-bitfields, -fno-tree-switch-conversion]
+---
+# Host tests run in env:native, not on the ESP32 toolchain.
+If:
+  PathMatch: test/.*
+CompileFlags:
+  CompilationDatabase: None
+  Add: [-xc++, -std=c++11, -I../../lib/xuna_core/include, -I../../.pio/libdeps/native/Unity/src]
+---
+If:
+  PathMatch: sim/.*
+CompileFlags:
+  CompilationDatabase: None
+  Add: [-xc++, -std=c++11, -I../lib/xuna_core/include]

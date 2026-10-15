@@ -1,0 +1,6 @@
+# lifecore_lab: duplicate feedback and source 0 are ignored. Expect feedback_applied 1.
+@+5000 choose 1 0
+@+5500 feedback 1 positive 1
+@+6000 feedback 1 positive 1
+@+10000 choose 2 0
+@+10500 feedback 2 positive 0

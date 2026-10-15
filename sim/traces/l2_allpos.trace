@@ -1,0 +1,65 @@
+# lifelab: every decision approved in one context. Open-loop: v1 and v2 each lock onto their own first action.
+@+100 choose 1 0
+@+150 feedback 1 positive 1
+@+200 choose 2 0
+@+250 feedback 2 positive 1
+@+300 choose 3 0
+@+350 feedback 3 positive 1
+@+400 choose 4 0
+@+450 feedback 4 positive 1
+@+500 choose 5 0
+@+550 feedback 5 positive 1
+@+600 choose 6 0
+@+650 feedback 6 positive 1
+@+700 choose 7 0
+@+750 feedback 7 positive 1
+@+800 choose 8 0
+@+850 feedback 8 positive 1
+@+900 choose 9 0
+@+950 feedback 9 positive 1
+@+1000 choose 10 0
+@+1050 feedback 10 positive 1
+@+1100 choose 11 0
+@+1150 feedback 11 positive 1
+@+1200 choose 12 0
+@+1250 feedback 12 positive 1
+@+1300 choose 13 0
+@+1350 feedback 13 positive 1
+@+1400 choose 14 0
+@+1450 feedback 14 positive 1
+@+1500 choose 15 0
+@+1550 feedback 15 positive 1
+@+1600 choose 16 0
+@+1650 feedback 16 positive 1
+@+1700 choose 17 0
+@+1750 feedback 17 positive 1
+@+1800 choose 18 0
+@+1850 feedback 18 positive 1
+@+1900 choose 19 0
+@+1950 feedback 19 positive 1
+@+2000 choose 20 0
+@+2050 feedback 20 positive 1
+@+2100 choose 21 0
+@+2150 feedback 21 positive 1
+@+2200 choose 22 0
+@+2250 feedback 22 positive 1
+@+2300 choose 23 0
+@+2350 feedback 23 positive 1
+@+2400 choose 24 0
+@+2450 feedback 24 positive 1
+@+2500 choose 25 0
+@+2550 feedback 25 positive 1
+@+2600 choose 26 0
+@+2650 feedback 26 positive 1
+@+2700 choose 27 0
+@+2750 feedback 27 positive 1
+@+2800 choose 28 0
+@+2850 feedback 28 positive 1
+@+2900 choose 29 0
+@+2950 feedback 29 positive 1
+@+3000 choose 30 0
+@+3050 feedback 30 positive 1
+@+3100 choose 31 0
+@+3150 feedback 31 positive 1
+@+3200 choose 32 0
+@+3250 feedback 32 positive 1

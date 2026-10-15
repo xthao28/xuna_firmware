@@ -32,7 +32,8 @@ class CommandCache {
   void remember(const uint8_t* b,size_t n,uint8_t result){
     if(n>12||n<6)return;
     auto& e=entries_[next_];e.valid=true;e.size=n;e.result=result;
-    for(size_t i=0;i<n;++i)e.bytes[i]=b[i];next_=(next_+1)%16;
+    for(size_t i=0;i<n;++i)e.bytes[i]=b[i];
+    next_=(next_+1)%16;
   }
 };
 }

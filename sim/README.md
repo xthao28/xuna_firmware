@@ -36,3 +36,23 @@ samples/Brier values, shadow agreement, exploration, feedback rejection and a
 deterministic fingerprint. It keeps at most 64 trace events and an eight-entry
 decision window. It does not persist state, emulate NVS/LittleFS, run `LifeCore`
 or write to a board.
+
+## Example traces
+
+[traces/](traces/) holds annotated traces for `lifelab` (`l*.trace`) and
+`lifecore_lab` (`c*.trace`); the first line of each states the expected result.
+Results are recorded in
+[lifecore-lab-runs-2026-10-15.md](../../docs/roadmap/lifecore-lab-runs-2026-10-15.md).
+
+## Closed-loop learning bench
+
+`learning_bench.cpp` runs the simulated owner (`xuna/lab/OwnerModel.h`) against
+random, static, v1 and v2 learners (`xuna/lab/LearnerBench.h`) for the §9.9
+scenarios plus drift, noisy, sparse and 4-action cases:
+
+```text
+g++ -std=c++11 -Wall -Wextra -Werror -O2 -Ilib/xuna_core/include sim/learning_bench.cpp -o learning_bench
+./learning_bench [--seeds N] [--curves]
+```
+
+Results: [life-lab-phase0-2026-10-15.md](../../docs/roadmap/life-lab-phase0-2026-10-15.md).

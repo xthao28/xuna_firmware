@@ -1,0 +1,6 @@
+# lifecore_lab: reboot between choose and feedback. Expect the pending decision dropped: feedback_applied 1.
+@+5000 choose 1 0
+@+5500 feedback 1 positive 1
+@+10000 choose 2 0
+@+10500 reboot
+@+11000 feedback 2 positive 1

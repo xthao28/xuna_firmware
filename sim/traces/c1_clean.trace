@@ -1,0 +1,21 @@
+# lifecore_lab: 10 choose/feedback cycles 5 s apart. Expect 10 persists, generation 10, event_count 10.
+@+5000 choose 1 1
+@+5500 feedback 1 positive 1
+@+10000 choose 2 0
+@+10500 feedback 2 positive 1
+@+15000 choose 3 1
+@+15500 feedback 3 positive 1
+@+20000 choose 4 0
+@+20500 feedback 4 positive 1
+@+25000 choose 5 1
+@+25500 feedback 5 positive 1
+@+30000 choose 6 0
+@+30500 feedback 6 positive 1
+@+35000 choose 7 1
+@+35500 feedback 7 positive 1
+@+40000 choose 8 0
+@+40500 feedback 8 positive 1
+@+45000 choose 9 1
+@+45500 feedback 9 positive 1
+@+50000 choose 10 0
+@+50500 feedback 10 positive 1
