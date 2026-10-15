@@ -130,6 +130,81 @@ class LearnerV3Codec {
     return result;
   }
 
+  // Stated-preference payload (LifeSnapshot v2 section 12, plan §11.6):
+  // which part of each cell's mass the owner stated. Sparse, because only a
+  // few cells ever receive statements:
+  //
+  //   0  u8 count;  then count × {u8 interaction, u8 dayPart, u8 action,
+  //                               u16 statedPositive Q8.8, u16 statedNegative Q8.8}
+  static constexpr uint8_t kStatedSectionVersion = 1;
+  static constexpr size_t kStatedEntrySize = 7;
+  static constexpr uint16_t kMaxStatedQ8 = 0x1000;  // 16 ratings, sanity bound
+
+  // 0 when no cell holds stated mass (the section is then omitted).
+  static size_t statedSize(const PreferenceLearnerV3& learner) {
+    const size_t count = statedCount(learner);
+    return count == 0 ? 0 : 1 + kStatedEntrySize * count;
+  }
+
+  static size_t encodeStated(const PreferenceLearnerV3& learner, uint8_t* out,
+                             size_t capacity) {
+    const size_t size = statedSize(learner);
+    if (size == 0 || out == 0 || capacity < size) return 0;
+    const LearnerV3Config& c = learner.config_;
+    out[0] = static_cast<uint8_t>(statedCount(learner));
+    uint8_t* cursor = out + 1;
+    for (uint8_t i = 0; i < c.interactions; ++i)
+      for (uint8_t d = 0; d < c.dayParts; ++d)
+        for (uint8_t a = 0; a < c.actions; ++a) {
+          const PreferenceLearnerV3::Cell& cell = learner.cells_[i][d][a];
+          if (cell.statedPositive == 0 && cell.statedNegative == 0) continue;
+          cursor[0] = i;
+          cursor[1] = d;
+          cursor[2] = a;
+          put16(cursor + 3, cell.statedPositive);
+          put16(cursor + 5, cell.statedNegative);
+          cursor += kStatedEntrySize;
+        }
+    return size;
+  }
+
+  // Applies stated shares to an already decoded learner. Validates the whole
+  // payload first; on failure nothing changes. Entries outside the RAM shape
+  // are counted in `dropped`; shares are clamped to the cell's mass.
+  static bool decodeStated(const uint8_t* in, size_t size,
+                           PreferenceLearnerV3& learner, uint16_t& dropped) {
+    dropped = 0;
+    if (in == 0 || size < 1 || size != 1 + kStatedEntrySize * size_t(in[0]))
+      return false;
+    const uint8_t count = in[0];
+    uint8_t seen[LearnerV3Config::kMaxInteractions][LearnerV3Config::kMaxDayParts]
+                [LearnerV3Config::kMaxActions] = {};
+    for (uint8_t n = 0; n < count; ++n) {
+      const uint8_t* e = in + 1 + kStatedEntrySize * n;
+      if (e[0] >= LearnerV3Config::kMaxInteractions ||
+          e[1] >= LearnerV3Config::kMaxDayParts ||
+          e[2] >= LearnerV3Config::kMaxActions || get16(e + 3) > kMaxStatedQ8 ||
+          get16(e + 5) > kMaxStatedQ8 || (get16(e + 3) == 0 && get16(e + 5) == 0) ||
+          seen[e[0]][e[1]][e[2]])
+        return false;
+      seen[e[0]][e[1]][e[2]] = 1;
+    }
+    const LearnerV3Config& c = learner.config_;
+    for (uint8_t n = 0; n < count; ++n) {
+      const uint8_t* e = in + 1 + kStatedEntrySize * n;
+      if (e[0] >= c.interactions || e[1] >= c.dayParts || e[2] >= c.actions) {
+        ++dropped;
+        continue;
+      }
+      PreferenceLearnerV3::Cell& cell = learner.cells_[e[0]][e[1]][e[2]];
+      cell.statedPositive = PreferenceLearnerV3::clampStated(
+          uint32_t(get16(e + 3)) << 8, cell.positive);
+      cell.statedNegative = PreferenceLearnerV3::clampStated(
+          uint32_t(get16(e + 5)) << 8, cell.negative);
+    }
+    return true;
+  }
+
   // Migrates v1 counts into coarse v3 cells (day part unknown). The ratio of
   // positive to negative evidence is kept exactly where possible, but the
   // total mass per cell is capped at the learner's effective memory
@@ -170,6 +245,18 @@ class LearnerV3Codec {
   }
 
  private:
+  static size_t statedCount(const PreferenceLearnerV3& learner) {
+    const LearnerV3Config& c = learner.config_;
+    size_t count = 0;
+    for (uint8_t i = 0; i < c.interactions; ++i)
+      for (uint8_t d = 0; d < c.dayParts; ++d)
+        for (uint8_t a = 0; a < c.actions; ++a) {
+          const PreferenceLearnerV3::Cell& cell = learner.cells_[i][d][a];
+          if (cell.statedPositive != 0 || cell.statedNegative != 0) ++count;
+        }
+    return count;
+  }
+
   static void put16(uint8_t* p, uint16_t v) {
     p[0] = static_cast<uint8_t>(v);
     p[1] = static_cast<uint8_t>(v >> 8);

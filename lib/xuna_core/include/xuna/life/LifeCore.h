@@ -20,6 +20,9 @@ enum class LifeCoreEventKind : uint8_t {
   Choose,             // app asks XUNA to choose: context 0 quiet, 1 play
   Feedback,           // explicit rating of the pending decision
   Greeting,           // GPIO0 press: XUNA chooses how to answer (D5)
+  // Confirmed statement (opcode 6): id = command id, context = contextKey
+  // (interaction << 4 | day part), action = ActionId, approved = like.
+  StatedPreference,
 };
 
 // Core-facing event vocabulary. Transport adapters translate BLE/buttons/text
@@ -69,6 +72,10 @@ struct LifeCoreStepOutput {
   bool feedbackNotReady = false;   // commit failed; RAM unchanged (§9.5)
   bool feedbackExpired = false;    // rating arrived after the D3 window
   bool decisionExpired = false;    // the pending decision timed out this step
+  bool statedApplied = false;      // opcode 6 committed and applied
+  bool statedRejected = false;     // invalid context/action/source → result 4
+  bool statedNotReady = false;     // commit failed; RAM unchanged (§9.5)
+  bool statedDuplicate = false;    // same command id already applied
   bool decisionShown = false;      // a Choose/Greeting showed a new decision
   uint8_t selectedAction = 0;      // ActionId shown by that decision
   bool selectedExplore = false;    // UCB picked it over the greedy action
@@ -126,6 +133,8 @@ class LifeCore {
     needs_.reset(now);
     mood_.reset();
     learner_.invalidate();
+    for (uint8_t i = 0; i < kStatedHistory; ++i) statedIds_[i] = 0;
+    statedNext_ = 0;
     gate_.reset();
     lastVisual_ = VisualIntent::Unknown;
     activity_ = ActivityFsm(activity_.thresholds());
@@ -249,6 +258,9 @@ class LifeCore {
         decide(LearnInteraction::ButtonGreeting, nextLocalId(), now, signals,
                output);
         return;
+      case LifeCoreEventKind::StatedPreference:
+        statePreference(event, output);
+        return;
       case LifeCoreEventKind::Feedback: {
         const ProductLearner::Result result = learner_.feedback(
             event.id, event.approved, event.source, now, commit_);
@@ -312,6 +324,45 @@ class LifeCore {
     return mask;
   }
 
+  // Opcode 6 (plan §11.6). Source 2 = confirmed text only (3, voice, waits
+  // for D16). ERROR_SAFE is read-only. In-session duplicates (same command
+  // id) are applied once; a failed commit is not remembered, so it can be
+  // retried.
+  void statePreference(const LifeCoreEvent& event, LifeCoreStepOutput& output) {
+    const uint8_t interaction = static_cast<uint8_t>(event.context >> 4);
+    const uint8_t dayPart = static_cast<uint8_t>(event.context & 0x0F);
+    uint8_t action = 0;
+    if (event.id == 0 || event.source != 2 ||
+        interaction >= kLearnInteractionCount ||
+        dayPart >= LearnerV3Config::kMaxDayParts ||
+        !learnIndexFor(static_cast<ActionId>(event.action), action) ||
+        activity_.state() == Activity::ErrorSafe) {
+      output.statedRejected = true;
+      return;
+    }
+    for (uint8_t i = 0; i < kStatedHistory; ++i) {
+      if (statedIds_[i] == event.id) {
+        output.statedDuplicate = true;
+        return;
+      }
+    }
+    const ProductLearner::Result result = learner_.statePreference(
+        static_cast<LearnInteraction>(interaction), dayPart, action,
+        event.approved, commit_);
+    if (result == ProductLearner::Result::CommitFailed) {
+      output.statedNotReady = true;
+      return;
+    }
+    if (result != ProductLearner::Result::Applied) {
+      output.statedRejected = true;
+      return;
+    }
+    statedIds_[statedNext_] = event.id;
+    statedNext_ = static_cast<uint8_t>((statedNext_ + 1U) % kStatedHistory);
+    output.statedApplied = true;
+    output.persistRequested = commit_ == 0;
+  }
+
   // Wrap-safe 32 → 64-bit extension; callers pass non-decreasing millis().
   void extendMono(MonoMs now) {
     mono64_ += static_cast<MonoMs>(now - lastNow_);
@@ -364,6 +415,9 @@ class LifeCore {
   VisualIntent lastVisual_ = VisualIntent::Unknown;
   Activity lastVisualActivity_ = Activity::Booting;
   uint32_t nextLocalId_ = kLocalDecisionIdBase + 1U;
+  static constexpr uint8_t kStatedHistory = 8;
+  uint32_t statedIds_[kStatedHistory] = {};
+  uint8_t statedNext_ = 0;
 };
 
 }  // namespace xuna

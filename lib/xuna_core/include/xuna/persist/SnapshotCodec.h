@@ -52,7 +52,7 @@ enum class SectionId : uint8_t {
   Dedup = 9,             // reserved: durable command idempotency
   Pointers = 10,         // reserved: log/memory consistency
   Episodes = 11,         // v1 episodes until the M05b memory store
-  StatedPreference = 12  // reserved: M05c-A statedMass
+  StatedPreference = 12  // stated share of learner mass (S24a, optional)
 };
 
 constexpr uint8_t kSectionRequired = 0x80;
@@ -121,6 +121,7 @@ class SnapshotCodec {
            (s.clock.lastTrustedUtcMinute ? kSectionHeaderSize + kClockSize : 0) +
            (s.hasNeeds ? kSectionHeaderSize + kNeedsSize : 0) +
            kSectionHeaderSize + LearnerV3Codec::encodedSize(s.learner.config()) +
+           statedSectionSize(s) +
            kSectionHeaderSize + kEpisodesSize + kTrailerSize;
   }
 
@@ -164,6 +165,16 @@ class SnapshotCodec {
     if (LearnerV3Codec::encode(s.learner, p, learnerSize) != learnerSize)
       return 0;
     p += learnerSize;
+
+    const size_t statedSize = LearnerV3Codec::statedSize(s.learner);
+    if (statedSize != 0) {
+      p = section(p, SectionId::StatedPreference, false,
+                  LearnerV3Codec::kStatedSectionVersion,
+                  static_cast<uint16_t>(statedSize));
+      if (LearnerV3Codec::encodeStated(s.learner, p, statedSize) != statedSize)
+        return 0;
+      p += statedSize;
+    }
 
     p = section(p, SectionId::Episodes, false, kEpisodesVersion, kEpisodesSize);
     p[0] = s.episodes.count;
@@ -232,6 +243,10 @@ class SnapshotCodec {
     s.generation = info.generation;
 
     uint32_t seen[4] = {0, 0, 0, 0};  // one bit per 7-bit section id
+    // The stated section refines learner cells, so it is applied after the
+    // loop: decoding the learner section resets the learner.
+    const uint8_t* stated = 0;
+    uint16_t statedLength = 0;
     const uint8_t* p = in + kHeaderSize;
     const uint8_t* end = in + size - kTrailerSize;
     while (p < end) {
@@ -247,6 +262,12 @@ class SnapshotCodec {
       const uint32_t bit = 1U << (id % 32);
       if (seen[id / 32] & bit) return LoadResult::Corrupt;
       seen[id / 32] |= bit;
+      if (id == uint8_t(SectionId::StatedPreference) &&
+          version <= LearnerV3Codec::kStatedSectionVersion) {
+        stated = data;
+        statedLength = length;
+        continue;
+      }
       const LoadResult r = parseSection(id, version, data, length, s, info);
       if (r == LoadResult::Missing) {  // not understood by this reader
         if (required) return LoadResult::TooNew;
@@ -259,7 +280,18 @@ class SnapshotCodec {
     const uint32_t mandatory = (1U << uint8_t(SectionId::Counters)) |
                                (1U << uint8_t(SectionId::Learner));
     if ((seen[0] & mandatory) != mandatory) return LoadResult::Corrupt;
+    if (stated != 0) {
+      uint16_t dropped = 0;
+      if (!LearnerV3Codec::decodeStated(stated, statedLength, s.learner, dropped))
+        return LoadResult::Corrupt;
+      info.droppedLearnerCells = static_cast<uint16_t>(info.droppedLearnerCells + dropped);
+    }
     return LoadResult::Ok;
+  }
+
+  static size_t statedSectionSize(const LifeSnapshotV2& s) {
+    const size_t size = LearnerV3Codec::statedSize(s.learner);
+    return size == 0 ? 0 : kSectionHeaderSize + size;
   }
 
   // Ok = parsed, Missing = not understood (unknown id or newer version),

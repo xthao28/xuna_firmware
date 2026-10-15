@@ -3,17 +3,26 @@
 #include <cstddef>
 #include <xuna/LifeEngine.h>
 namespace xuna {
-struct BleCommand { uint32_t id=0, target=0; uint8_t opcode=0,arg=0,source=0,error=0; };
-inline BleCommand parseCommand(const uint8_t* b,size_t n) {
+struct BleCommand { uint32_t id=0, target=0; uint8_t opcode=0,arg=0,source=0,error=0,contextKey=0,action=0; };
+// Opcode 6 StatedPreference (plan §11.6, 12 bytes: arg = polarity, source 2 =
+// confirmed text, contextKey @8, actionId @9, reserved u16 @10 = 0) is parsed
+// only when `statedPreference` is set; until S18 wires it the production
+// adapter keeps treating opcode 6 as unknown (error 3). Source 3 (voice)
+// stays invalid until D16. Context/action repertoire checks belong to the core.
+inline BleCommand parseCommand(const uint8_t* b,size_t n,bool statedPreference=false) {
   BleCommand c; if(n>=6)c.id=LifeEngine::get32(b+2);
   if(n!=8&&n!=12){c.error=2;return c;}
   if(b[0]!=1){c.error=1;return c;}
   c.opcode=b[1];c.arg=b[6];c.source=b[7];
   if(!c.id){c.error=4;return c;}
-  if(c.opcode<1||c.opcode>4){c.error=3;return c;}
-  if((c.opcode==3&&n!=12)||(c.opcode!=3&&n!=8)){c.error=2;return c;}
+  const bool stated=statedPreference&&c.opcode==6;
+  if((c.opcode<1||c.opcode>4)&&!stated){c.error=3;return c;}
+  const bool longFrame=c.opcode==3||stated;
+  if((longFrame&&n!=12)||(!longFrame&&n!=8)){c.error=2;return c;}
   if(c.opcode==3)c.target=LifeEngine::get32(b+8);
+  if(stated){c.contextKey=b[8];c.action=b[9];}
   if((c.opcode==1&&(c.arg>3||c.source))||(c.opcode==2&&(c.arg>1||c.source))||(c.opcode==3&&(c.arg>1||c.source<1||c.source>2||!c.target))||(c.opcode==4&&(c.arg||c.source)))c.error=4;
+  if(stated&&(c.arg>1||c.source!=2||b[10]||b[11]))c.error=4;
   return c;
 }
 class CommandCache {

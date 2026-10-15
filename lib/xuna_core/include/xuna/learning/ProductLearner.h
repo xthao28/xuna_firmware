@@ -93,6 +93,20 @@ class ProductLearner {
     return Result::Applied;
   }
 
+  // Confirmed stated preference (opcode 6, plan §11.6), committed first like
+  // a rating. `action` is a learner index. It is not a rating: the pending
+  // decision, `feedbackCount` and the episodes are unchanged.
+  Result statePreference(LearnInteraction interaction, uint8_t dayPart,
+                         uint8_t action, bool like, ISnapshotCommit* commit) {
+    LifeSnapshotV2 staged = state_;
+    if (!staged.learner.state(static_cast<uint8_t>(interaction), dayPart,
+                              action, like))
+      return Result::Rejected;
+    if (commit != 0 && !commit->commit(staged)) return Result::CommitFailed;
+    state_ = staged;
+    return Result::Applied;
+  }
+
   // Forget learned preferences and episodes, keeping counters that describe
   // the pet's life (active time, generation) and the clock watermark. Like
   // v1 `LifeStorage::clear`,

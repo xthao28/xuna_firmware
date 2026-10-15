@@ -37,6 +37,10 @@ struct LearnerV3Config {
   // Scale ε by the recent share of decisions that received a rating, so
   // A/D stop exploring when nobody answers [P].
   bool feedbackAware = false;
+  // Stated preferences (plan §11.6, D17): weight of one confirmed statement
+  // and the cap on stated mass per cell, in ratings. Both [P] until S25.
+  uint32_t statedWeightQ16 = 32768;  // w_s = 0.5
+  uint32_t statedCapQ16 = 2U << 16;  // 2 explicit ratings
 };
 
 struct V3Decision {
@@ -56,6 +60,8 @@ struct V3CellView {
   uint32_t negativeQ16 = 0;  // discounted negative mass
   uint16_t rated = 0;        // raw ratings in the cell, saturating
   bool fine = false;         // estimate taken from the day-part cell
+  uint32_t statedPositiveQ16 = 0;  // part of positiveQ16 the owner stated
+  uint32_t statedNegativeQ16 = 0;  // part of negativeQ16 the owner stated
 };
 
 class LearnerV3Codec;
@@ -171,6 +177,19 @@ class PreferenceLearnerV3 {
     return true;
   }
 
+  // A confirmed stated preference (plan §11.6, opcode 6): `user_stated`
+  // evidence of weight w_s on the coarse cell and, with a day part, on the
+  // fine cell, capped per cell. It is not a rating: `rated`, the duplicate
+  // window and the error trackers are unchanged.
+  bool state(uint8_t interaction, uint8_t dayPart, uint8_t action, bool like) {
+    if (!validContext(interaction, dayPart) || action >= config_.actions)
+      return false;
+    stateInto(cells_[interaction][0][action], like);
+    if (dayPart != 0) stateInto(cells_[interaction][dayPart][action], like);
+    ++policyVersion_;
+    return true;
+  }
+
   // Estimate used for decisions: fine cell when it has nEff ≥ m, else coarse.
   V3CellView view(uint8_t interaction, uint8_t dayPart, uint8_t action) const {
     V3CellView result;
@@ -184,6 +203,8 @@ class PreferenceLearnerV3 {
     result.positiveQ16 = coarse.positive;
     result.negativeQ16 = coarse.negative;
     result.rated = coarse.rated;
+    result.statedPositiveQ16 = uint32_t(coarse.statedPositive) << 8;
+    result.statedNegativeQ16 = uint32_t(coarse.statedNegative) << 8;
     if (dayPart == 0) return result;
 
     const Cell& fine = cells_[interaction][dayPart][action];
@@ -198,6 +219,8 @@ class PreferenceLearnerV3 {
     result.positiveQ16 = fine.positive;
     result.negativeQ16 = fine.negative;
     result.rated = fine.rated;
+    result.statedPositiveQ16 = uint32_t(fine.statedPositive) << 8;
+    result.statedNegativeQ16 = uint32_t(fine.statedNegative) << 8;
     result.fine = true;
     return result;
   }
@@ -257,6 +280,8 @@ class PreferenceLearnerV3 {
           mix32(hash, cells_[i][d][a].positive);
           mix32(hash, cells_[i][d][a].negative);
           mix32(hash, cells_[i][d][a].rated);
+          mix32(hash, cells_[i][d][a].statedPositive);
+          mix32(hash, cells_[i][d][a].statedNegative);
         }
     }
     // Error EMAs (variant D) and the rated share are transient exploration
@@ -271,6 +296,10 @@ class PreferenceLearnerV3 {
     uint32_t positive = 0;  // discounted evidence mass above the prior, Q16
     uint32_t negative = 0;
     uint16_t rated = 0;     // raw rating count, saturating
+    // Share of positive/negative that came from stated preferences, Q8.8
+    // (≤ statedCapQ16; always ≤ the mass it is part of).
+    uint16_t statedPositive = 0;
+    uint16_t statedNegative = 0;
   };
 
   bool validContext(uint8_t interaction, uint8_t dayPart) const {
@@ -287,6 +316,39 @@ class PreferenceLearnerV3 {
     cell.positive = discount(cell.positive) + (approved ? 65536U : 0U);
     cell.negative = discount(cell.negative) + (approved ? 0U : 65536U);
     if (cell.rated < 0xFFFFU) ++cell.rated;
+    // Stated evidence ages with the cell like any other evidence.
+    cell.statedPositive = clampStated(discount(uint32_t(cell.statedPositive) << 8),
+                                      cell.positive);
+    cell.statedNegative = clampStated(discount(uint32_t(cell.statedNegative) << 8),
+                                      cell.negative);
+  }
+
+  // Latest statement wins: the opposite stated mass is withdrawn (explicit
+  // ratings are untouched), then w_s is added up to the per-cell cap.
+  void stateInto(Cell& cell, bool like) const {
+    uint32_t& same = like ? cell.positive : cell.negative;
+    uint32_t& opposite = like ? cell.negative : cell.positive;
+    uint16_t& sameStated = like ? cell.statedPositive : cell.statedNegative;
+    uint16_t& oppositeStated = like ? cell.statedNegative : cell.statedPositive;
+    const uint32_t withdrawn = uint32_t(oppositeStated) << 8;
+    opposite = opposite > withdrawn ? opposite - withdrawn : 0;
+    oppositeStated = 0;
+    const uint32_t current = uint32_t(sameStated) << 8;
+    const uint32_t room =
+        config_.statedCapQ16 > current ? config_.statedCapQ16 - current : 0;
+    const uint32_t add =
+        config_.statedWeightQ16 < room ? config_.statedWeightQ16 : room;
+    same += add;
+    sameStated = clampStated(current + add, same);
+  }
+
+  // Q16 → Q8.8, never above the mass it belongs to.
+  static uint16_t clampStated(uint32_t statedQ16, uint32_t massQ16) {
+    const uint32_t value = statedQ16 < massQ16 ? statedQ16 : massQ16;
+    const uint32_t q8 = (value + 128U) >> 8;
+    const uint32_t limit = massQ16 >> 8;
+    const uint32_t bounded = q8 > limit ? limit : q8;
+    return static_cast<uint16_t>(bounded > 0xFFFFU ? 0xFFFFU : bounded);
   }
 
   uint32_t discount(uint32_t value) const {
