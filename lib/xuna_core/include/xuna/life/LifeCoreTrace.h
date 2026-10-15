@@ -17,6 +17,8 @@ struct LifeCoreTraceReport {
   uint32_t persistRequests = 0;
   uint32_t persistFailures = 0;
   uint32_t reboots = 0;
+  uint32_t syncAccepted = 0;
+  uint32_t syncRejected = 0;
   uint32_t finalEventCount = 0;
   uint32_t finalGeneration = 0;
   uint32_t fingerprint = 0;
@@ -72,8 +74,12 @@ class LifeCoreTraceRunner {
           enqueue = true;
           break;
         case LearningTraceVerb::Button:
-          event = LifeCoreEvent(LifeCoreEventKind::RequestAction, 0, 0,
-                                command.value0 == 'A' ? 1 : 0);
+          // GPIO0 ('A') is the learnable greeting (D5); GPIO14 ('B') is a
+          // direct idle request.
+          event = command.value0 == 'A'
+                      ? LifeCoreEvent(LifeCoreEventKind::Greeting)
+                      : LifeCoreEvent(LifeCoreEventKind::RequestAction, 0, 0,
+                                      static_cast<uint8_t>(ActionId::Idle));
           enqueue = true;
           break;
         case LearningTraceVerb::Command:
@@ -91,7 +97,20 @@ class LifeCoreTraceRunner {
         case LearningTraceVerb::Powercut:
           lab.powerCutNextPersist();
           break;
-        case LearningTraceVerb::Sync:
+        case LearningTraceVerb::Sync: {
+          // `sync <unix seconds> <tz minutes>` from the phone (S10).
+          const bool tzOk = command.signedValue >= -32768 &&
+                            command.signedValue <= 32767;
+          const SyncResult result =
+              tzOk ? lab.session().sync(
+                         int64_t(command.value0) * 1000,
+                         static_cast<int16_t>(command.signedValue),
+                         TimeSource::Phone, command.atMs)
+                   : SyncResult{SyncStatus::RejectedInvalid, false};
+          if (result.status == SyncStatus::Accepted) ++report.syncAccepted;
+          else ++report.syncRejected;
+          break;
+        }
         case LearningTraceVerb::Day:
         case LearningTraceVerb::Expect:
           supported = false;
@@ -131,21 +150,20 @@ class LifeCoreTraceRunner {
         if (!lab.persist()) ++report.persistFailures;
       }
     }
-    report.finalEventCount = lab.session().core().life().eventCount;
-    report.finalGeneration = lab.session().core().life().generation;
+    report.finalEventCount =
+        lab.session().core().snapshot().counters.feedbackCount;
+    report.finalGeneration = lab.session().core().snapshot().generation;
     report.fingerprint = fingerprint(lab.session());
     return true;
   }
 
  private:
   static uint32_t fingerprint(const LifeCoreSession& session) {
-    uint8_t bytes[LifeEngine::kSnapshotSize] = {};
-    session.core().life().encode(bytes);
+    uint8_t bytes[SnapshotCodec::kBudget] = {};
+    const size_t size =
+        SnapshotCodec::encode(session.core().snapshot(), bytes, sizeof(bytes));
     uint32_t hash = 2166136261U;
-    for (uint8_t byte : bytes) hash = (hash ^ byte) * 16777619U;
-    const uint32_t candidate = session.core().candidate().fingerprint();
-    for (uint8_t i = 0; i < 4; ++i)
-      hash = (hash ^ ((candidate >> (8U * i)) & 255U)) * 16777619U;
+    for (size_t i = 0; i < size; ++i) hash = (hash ^ bytes[i]) * 16777619U;
     hash = (hash ^ static_cast<uint8_t>(session.clock().quality(0))) *
            16777619U;
     return hash;

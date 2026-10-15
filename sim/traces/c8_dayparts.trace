@@ -1,0 +1,9 @@
+# lifecore_lab: trusted time (S10). Morning sync, rating, reboot, rollback sync rejected by the persisted watermark, evening sync. Expect sync accepted 2, rejected 1, feedback 2, generation 2, clock Synced (2).
+@+1000 sync 1792026000 420
+@+2000 choose 1 0
+@+2500 feedback 1 positive 1
+@+3000 reboot
+@+4000 sync 1792025000 420
+@+5000 sync 1792065600 420
+@+6000 choose 2 1
+@+6500 feedback 2 positive 1

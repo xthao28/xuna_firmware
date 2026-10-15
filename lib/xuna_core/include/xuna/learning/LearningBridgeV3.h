@@ -13,7 +13,8 @@ namespace xuna {
 // LifeEngine. v1 still chooses what XUNA shows; v3 observes the same
 // decisions and explicit feedback so the two can be compared before any
 // production switch. The bridge owns neither learner and changes no
-// persistence bytes. Replaces the v2 LearningBridge inside LifeCore.
+// persistence bytes. Lab component since the S18 preparation (2026-10-15):
+// LifeCore now uses ProductLearner (v3 decides, LifeSnapshot v2).
 struct LearningBridgeV3Decision {
   uint32_t id = 0;
   uint32_t decidedAt = 0;

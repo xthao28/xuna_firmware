@@ -18,8 +18,9 @@ struct LifeCoreSessionStepOutput {
 };
 
 // Adapter-free session wrapper for deterministic replay. It owns only a
-// bounded event queue and ClockModel; transport and persistence remain outside
-// xuna_core. The wrapper is suitable for Life Lab and later main-loop wiring.
+// bounded event queue; the clock lives in LifeCore (S10 host part) so the
+// learner can use day parts. Transport and persistence remain outside
+// xuna_core. Suitable for Life Lab and later main-loop wiring.
 class LifeCoreSession {
  public:
   static constexpr size_t kQueueCapacity = 8;
@@ -28,7 +29,6 @@ class LifeCoreSession {
       : core_(seed, stream) {}
 
   bool begin(MonoMs now, bool restoreOk) {
-    clock_.onBoot(now);
     queue_.clear();
     queueOverflow_ = false;
     return core_.begin(now, restoreOk);
@@ -41,8 +41,8 @@ class LifeCoreSession {
   }
 
   SyncResult sync(int64_t utcMs, int16_t tzOffsetMin, TimeSource source,
-                  uint64_t mono) {
-    return clock_.onSync(utcMs, tzOffsetMin, source, mono);
+                  MonoMs now) {
+    return core_.sync(utcMs, tzOffsetMin, source, now);
   }
 
   LifeCoreSessionStepOutput step(MonoMs now, size_t budget = kQueueCapacity) {
@@ -53,22 +53,23 @@ class LifeCoreSession {
 
     LifeCoreSessionStepOutput output;
     output.core = core_.step({now, events, count});
-    output.clockQuality = clock_.quality(now);
-    output.utcMinute = clock_.utcMinute(now);
-    output.dayPart = clock_.dayPart(now);
+    const ClockModel& clock = core_.clock();
+    const uint64_t mono = core_.mono64();
+    output.clockQuality = clock.quality(mono);
+    output.utcMinute = clock.utcMinute(mono);
+    output.dayPart = clock.dayPart(mono);
     output.queueOverflow = queueOverflow_;
     queueOverflow_ = false;
     return output;
   }
 
   size_t queued() const { return queue_.size(); }
-  const ClockModel& clock() const { return clock_; }
+  const ClockModel& clock() const { return core_.clock(); }
   const LifeCore& core() const { return core_; }
   LifeCore& core() { return core_; }
 
  private:
   LifeCore core_;
-  ClockModel clock_;
   RingBuffer<LifeCoreEvent, kQueueCapacity> queue_;
   bool queueOverflow_ = false;
 };

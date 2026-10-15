@@ -1,4 +1,4 @@
-# lifecore_lab: reboots with no committed slot; reserved verbs counted unsupported. Expect reboots 2, unsupported 3.
+# lifecore_lab: reboots with no committed slot; sync 0 is rejected (invalid time); day/expect counted unsupported. Expect reboots 2, unsupported 2, sync rejected 1.
 @+1000 reboot
 @+2000 reboot
 @+3000 day 1

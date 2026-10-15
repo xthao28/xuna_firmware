@@ -47,7 +47,7 @@ int run(std::istream& input) {
   std::cout << "processed,unsupported,rejected,choices,feedback_applied,"
                "persist_requests,persist_failures,reboots,final_event_count,"
                "final_generation,fingerprint,activity,visual,clock_quality,"
-               "utc_minute\n";
+               "utc_minute,sync_accepted,sync_rejected\n";
   std::cout << report.processed << ',' << report.unsupported << ','
             << report.rejected << ',' << report.choices << ','
             << report.feedbackApplied << ',' << report.persistRequests << ','
@@ -57,7 +57,8 @@ int run(std::istream& input) {
             << static_cast<unsigned>(report.finalOutput.core.activity) << ','
             << static_cast<unsigned>(report.finalOutput.core.visual) << ','
             << static_cast<unsigned>(report.finalOutput.clockQuality) << ','
-            << report.finalOutput.utcMinute << "\n";
+            << report.finalOutput.utcMinute << ',' << report.syncAccepted << ','
+            << report.syncRejected << "\n";
   return 0;
 }
 
