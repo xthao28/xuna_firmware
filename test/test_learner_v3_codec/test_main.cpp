@@ -1,6 +1,7 @@
 #include <unity.h>
 #include <xuna/learning/LearnerV3Codec.h>
 #include <xuna/learning/LearnerV3Explanation.h>
+#include <xuna/learning/LearnerVocabulary.h>
 
 using namespace xuna;
 
@@ -199,6 +200,40 @@ void explanation_reports_evidence_and_reason() {
   TEST_ASSERT_FALSE(LearnerV3Explainer::explain(learner, d).valid);
 }
 
+void product_vocabulary_maps_and_migrates() {
+  ActionId action = ActionId::Sleep;
+  TEST_ASSERT_TRUE(learnActionId(2, action));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(ActionId::Curious),
+                          static_cast<uint8_t>(action));
+  TEST_ASSERT_FALSE(learnActionId(3, action));
+  uint8_t index = 9;
+  TEST_ASSERT_TRUE(learnIndexFor(ActionId::Happy, index));
+  TEST_ASSERT_EQUAL_UINT8(1, index);
+  TEST_ASSERT_FALSE(learnIndexFor(ActionId::Sleep, index));
+
+  const LearnerV3Config product = productLearnerConfig();
+  TEST_ASSERT_EQUAL_UINT32(458, LearnerV3Codec::encodedSize(product));
+
+  // v1 counts keep their meaning: quiet/play × idle/happy; greeting empty.
+  LifeEngine v1;
+  v1.positive[1][1] = 4;
+  v1.negative[0][0] = 2;
+  PreferenceLearnerV3 learner(product);
+  TEST_ASSERT_TRUE(LearnerV3Codec::migrateFromV1(v1, learner));
+  TEST_ASSERT_EQUAL_UINT32(4U << 16,
+                           learner.view(static_cast<uint8_t>(
+                                            LearnInteraction::PlayRequest),
+                                        0, 1).positiveQ16);
+  TEST_ASSERT_EQUAL_UINT32(2U << 16, learner.view(0, 0, 0).negativeQ16);
+  for (uint8_t a = 0; a < kLearnActionCount; ++a)
+    TEST_ASSERT_EQUAL_UINT32(
+        0, learner.view(static_cast<uint8_t>(LearnInteraction::ButtonGreeting),
+                        0, a).nEffQ16);
+  uint8_t buffer[458] = {};
+  TEST_ASSERT_EQUAL_UINT32(458, LearnerV3Codec::encode(learner, buffer,
+                                                       sizeof(buffer)));
+}
+
 void setUp() {}
 void tearDown() {}
 int main() {
@@ -210,5 +245,6 @@ int main() {
   RUN_TEST(migration_keeps_small_counts_exact);
   RUN_TEST(migration_caps_long_history_and_stays_adaptable);
   RUN_TEST(explanation_reports_evidence_and_reason);
+  RUN_TEST(product_vocabulary_maps_and_migrates);
   return UNITY_END();
 }

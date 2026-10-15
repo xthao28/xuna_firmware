@@ -91,6 +91,29 @@ std::vector<Scenario> scenarios() {
     list.push_back(s);
   }
   {
+    // Approved product shape (D5): quiet/play/button greeting × idle/happy/
+    // curious. Owner prefers idle when quiet, happy at play, curious greeting.
+    Scenario s = {"product_3x3", base(3), trials(150)};
+    s.owner.contexts = 3;
+    s.owner.preferred[0] = 0;
+    s.owner.preferred[1] = 1;
+    s.owner.preferred[2] = 2;
+    list.push_back(s);
+  }
+  {
+    Scenario s = {"product_3x3_reversal", base(3), trials(240)};
+    s.owner.contexts = 3;
+    s.owner.kind = OwnerKind::Reversal;
+    s.owner.changeAt = 120;
+    s.owner.preferred[0] = 0;
+    s.owner.preferred[1] = 1;
+    s.owner.preferred[2] = 2;
+    s.owner.laterPreferred[0] = 2;
+    s.owner.laterPreferred[1] = 0;
+    s.owner.laterPreferred[2] = 1;
+    list.push_back(s);
+  }
+  {
     // Day parts agree; the second day part appears only from trial 80, so
     // the first answers there test generalization from the shared prior.
     Scenario s = {"new_daypart", base(), trials(160)};

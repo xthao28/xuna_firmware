@@ -100,6 +100,27 @@ void failed_commit_leaves_ram_unchanged_and_allows_retry() {
   TEST_ASSERT_EQUAL_UINT32(2, lab.session().core().life().eventCount);
 }
 
+// Plan §9.9 "Spam": 1,000 feedback attempts in 60 s apply at most once per
+// reaction and cause exactly one urgent commit.
+void feedback_spam_applies_once_and_commits_once() {
+  LifeCoreSnapshotLab lab(42, 54);
+  TEST_ASSERT_TRUE(lab.boot(0));
+  chooseAndRate(lab, 1, 10);
+  uint32_t applied = 0, committed = 0;
+  for (uint32_t i = 0; i < 1000; ++i) {
+    const LifeCoreSessionStepOutput out =
+        rate(lab, 1, 20 + static_cast<MonoMs>(i) * 60U);
+    if (out.core.learningFeedbackApplied) ++applied;
+    if (out.core.feedbackCommitted) ++committed;
+  }
+  TEST_ASSERT_EQUAL_UINT32(1, applied);
+  TEST_ASSERT_EQUAL_UINT32(1, committed);
+  TEST_ASSERT_EQUAL_UINT32(1, lab.session().core().life().eventCount);
+  TEST_ASSERT_EQUAL_UINT32(1, lab.session().core().life().generation);
+  TEST_ASSERT_EQUAL_UINT32(
+      1, lab.session().core().shadowMetrics().feedbackAccepted);
+}
+
 void snapshot_lab_recovery_rejects_corrupt_latest_slot() {
   LifeCoreSnapshotLab lab(42, 54);
   TEST_ASSERT_TRUE(lab.boot(0));
@@ -121,6 +142,7 @@ int main() {
   RUN_TEST(snapshot_lab_restores_feedback_and_resets_shadow_candidate);
   RUN_TEST(snapshot_lab_power_cut_keeps_previous_committed_slot);
   RUN_TEST(failed_commit_leaves_ram_unchanged_and_allows_retry);
+  RUN_TEST(feedback_spam_applies_once_and_commits_once);
   RUN_TEST(snapshot_lab_recovery_rejects_corrupt_latest_slot);
   return UNITY_END();
 }
