@@ -1,5 +1,6 @@
 #include "BoardConfig.h"
 #include <Arduino.h>
+#include <cstdio>
 #include <soc/esp32s3/spiram.h>
 #include "DisplayManager.h"
 #include "InputManager.h"
@@ -25,6 +26,37 @@ bool displayReady = false;
 uint32_t diagnosticsAt = 0;
 uint32_t lastLoopUs = 0, maxLoopGapUs = 0;
 uint8_t lastActivity = 255;
+uint8_t loggedActivity = 255;
+const char* activityName(xuna::Activity a) {
+  switch(a) {
+    case xuna::Activity::Booting: return "booting";
+    case xuna::Activity::Idle: return "idle";
+    case xuna::Activity::Observing: return "observing";
+    case xuna::Activity::Reacting: return "reacting";
+    case xuna::Activity::Playing: return "playing";
+    case xuna::Activity::Resting: return "resting";
+    case xuna::Activity::Sleeping: return "sleeping";
+    case xuna::Activity::EvolutionTransition: return "evolution";
+    case xuna::Activity::ErrorSafe: return "error_safe";
+  }
+  return "unknown";
+}
+// Life-feel board trial: one parseable line per call (energy/stim raw 0..65535).
+void logNeeds(const char* tag, uint32_t now) {
+  const auto& n=needs.state();
+  Serial.printf("%s t_s=%u activity=%s energy=%u energy_pct=%u stim=%u stim_pct=%u\n", tag, now / 1000,
+                activityName(activity.state()), n.energy, uint32_t(n.energy) * 100 / 65535,
+                n.stimulation, uint32_t(n.stimulation) * 100 / 65535);
+}
+void logActivityChange(uint32_t now) {
+  const uint8_t state=static_cast<uint8_t>(activity.state());
+  if(loggedActivity==state) return;
+  char head[48];
+  snprintf(head, sizeof(head), "activity_change from=%s",
+           loggedActivity==255 ? "none" : activityName(static_cast<xuna::Activity>(loggedActivity)));
+  loggedActivity=state;
+  logNeeds(head, now);
+}
 void logMemory() {
   Serial.printf("heap_free=%u heap_min=%u psram_heap_total=%u psram_free=%u\n",
                 ESP.getFreeHeap(), ESP.getMinFreeHeap(), ESP.getPsramSize(), ESP.getFreePsram());
@@ -69,6 +101,7 @@ void setup() {
   xuna::ActivityGuards boot; boot.restoreOk=storageReady; boot.energy=needs.state().energy;
   activity.request(storageReady ? xuna::Activity::Idle : xuna::Activity::ErrorSafe,boot,now);
   syncActivityVisual(now);
+  logActivityChange(now);
   activeAt = savedAt = now;
   localBehavior.activity(now);
   bleReady = ble.begin();
@@ -104,6 +137,7 @@ void loop() {
   if (localBehavior.choosePreferred(now, activity.state() == xuna::Activity::Idle, learner.preferred(0), quietAction))
     ble.requestLocalAction(animation,activity,needs,static_cast<xuna::ActionId>(quietAction),now);
   syncActivityVisual(now);
+  logActivityChange(now);
   animation.update(now);
   if(displayReady)display.update(now,animation.state());
   if (bleReady) ble.stateChanged(animation.state(), now);
@@ -116,6 +150,7 @@ void loop() {
   if (uint32_t(now - diagnosticsAt) >= xuna::kDiagnosticsMs) {
     Serial.printf("scene=animated state=%s loop_gap_max_us=%u draws=%u draw_max_us=%u\n",
                   (animation.state() == xuna::PetState::Idle ? "idle" : (animation.state() == xuna::PetState::Happy ? "happy" : (animation.state() == xuna::PetState::Sleep ? "sleep" : "curious"))), maxLoopGapUs, display.draws(), display.maxDrawUs());
+    logNeeds("needs", now);
     logMemory(); diagnosticsAt = now;
     maxLoopGapUs = 0;
   }
