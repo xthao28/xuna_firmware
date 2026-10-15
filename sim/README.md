@@ -68,3 +68,17 @@ scenario, noisy flips and late-context generalization:
 g++ -std=c++11 -Wall -Wextra -Werror -O2 -Ilib/xuna_core/include sim/learner_sweep.cpp -o learner_sweep
 ./learner_sweep [--seeds N]
 ```
+
+## Needs and mood timeline
+
+`life_timeline.cpp` runs the real `LifeCore` for hours with an owner profile
+and prints a summary row or a per-minute series; `life_sweep.py` grids the
+Life Lab needs/FSM knobs against the Proposed life-feel targets:
+
+```text
+g++ -std=c++11 -Wall -Wextra -Werror -O2 -Ilib/xuna_core/include sim/life_timeline.cpp -o life_timeline
+./life_timeline --profile idle|casual|active --hours 8 [--series] [knobs...]
+python sim/life_sweep.py ./life_timeline
+```
+
+Results: [life-lab-needs-timeline-2026-10-15.md](../../docs/roadmap/life-lab-needs-timeline-2026-10-15.md).

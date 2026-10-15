@@ -39,18 +39,34 @@ inline bool learnIndexFor(ActionId action, uint8_t& index) {
   return false;
 }
 
-// Product learner shape and the Life Lab sweep winner (values Proposed).
-// 3 interactions × 5 day parts × 3 actions → 458-byte learner payload.
-inline LearnerV3Config productLearnerConfig() {
+// E10-approved policy and starting parameters (owner, 2026-10-15): UCB,
+// γ 0.90, k 1, m 1, bonus 0.15. Shape is set by the callers below.
+inline LearnerV3Config approvedLearnerParameters() {
   LearnerV3Config config;
-  config.interactions = kLearnInteractionCount;
   config.dayParts = LearnerV3Config::kMaxDayParts;
-  config.actions = kLearnActionCount;
   config.policy = ExplorePolicy::Ucb;
   config.gammaQ16 = 58982;          // 0.90
   config.priorStrengthQ16 = 65536;  // k = 1
   config.fineMinQ16 = 65536;        // m = 1
   config.ucbBonusQ16 = 9830;        // 0.15
+  return config;
+}
+
+// Product learner shape (D5): 3 interactions × 5 day parts × 3 actions →
+// 458-byte learner payload. Needs LifeSnapshot v2.
+inline LearnerV3Config productLearnerConfig() {
+  LearnerV3Config config = approvedLearnerParameters();
+  config.interactions = kLearnInteractionCount;
+  config.actions = kLearnActionCount;
+  return config;
+}
+
+// Shape that fits the v1 snapshot: quiet/play × idle/happy. Used by the
+// LifeCore shadow and the board trial until LifeSnapshot v2 exists.
+inline LearnerV3Config v1CompatibleLearnerConfig() {
+  LearnerV3Config config = approvedLearnerParameters();
+  config.interactions = 2;
+  config.actions = 2;
   return config;
 }
 

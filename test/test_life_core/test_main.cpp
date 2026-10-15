@@ -153,8 +153,23 @@ void core_wakes_from_sleep_for_actions() {
                           static_cast<uint8_t>(output.activity));
 }
 
+// Approved life-feel values (2026-10-15): an accepted happy reaction spends
+// 10% of its registry cost and raises stimulation.
+void life_feel_action_spends_energy_and_stimulates() {
+  LifeCore core(42, 54);
+  TEST_ASSERT_TRUE(core.begin(0, true));
+  const LifeCoreStepOutput before = core.step({10, 0, 0});
+  const LifeCoreEvent happy{LifeCoreEventKind::RequestAction, 0, 0, 1, false,
+                            0, 0};
+  const LifeCoreStepOutput after = core.step({10, &happy, 1});
+  TEST_ASSERT_TRUE(after.actionAccepted);
+  TEST_ASSERT_EQUAL_UINT16(before.needs.energy - 409, after.needs.energy);
+  TEST_ASSERT_EQUAL_UINT16(4096, after.needs.stimulation);
+}
+
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(life_feel_action_spends_energy_and_stimulates);
   RUN_TEST(core_starts_and_ticks_local_state);
   RUN_TEST(core_runs_v1_and_v2_choice_from_existing_state);
   RUN_TEST(core_applies_feedback_once_and_requests_v1_persist);

@@ -157,6 +157,49 @@ void guarded_exits() {
   TEST_ASSERT_TRUE(fsm.request(Activity::Booting, g, 401).ok);
 }
 
+// Life Lab knobs (2026-10-15): defaults keep the shipped behaviour.
+void lab_knobs_wake_energy_and_resume_rest() {
+  ActivityGuards g = ready();
+  g.explicitWake = false;
+
+  ActivityFsm plain;
+  TEST_ASSERT_TRUE(plain.request(Activity::Idle, g, 0).ok);
+  g.energy = 1000;
+  TEST_ASSERT_TRUE(plain.tick(10, g));
+  TEST_ASSERT_EQUAL(Activity::Sleeping, plain.state());
+  g.energy = 65535;
+  TEST_ASSERT_FALSE(plain.tick(20, g));  // explicit wake only
+
+  ActivityThresholds t;
+  t.wakeEnergy = 52428;
+  t.resumeInterruptedRest = true;
+  ActivityFsm tuned(t);
+  TEST_ASSERT_TRUE(tuned.request(Activity::Idle, g, 0).ok);
+  g.energy = 1000;
+  tuned.tick(10, g);
+  TEST_ASSERT_EQUAL(Activity::Sleeping, tuned.state());
+  g.energy = 52428;
+  TEST_ASSERT_TRUE(tuned.tick(20, g));
+  TEST_ASSERT_EQUAL(Activity::Idle, tuned.state());
+
+  // Interrupted rest resumes until restExit; the default does not.
+  ActivityFsm* fsms[2] = {&plain, &tuned};
+  for (ActivityFsm* fsm : fsms) {
+    ActivityGuards wake = ready();
+    fsm->request(Activity::Idle, wake, 30);
+    g.energy = 10000;
+    fsm->tick(40, g);
+    TEST_ASSERT_EQUAL(Activity::Resting, fsm->state());
+    TEST_ASSERT_TRUE(fsm->request(Activity::Reacting, g, 50).ok);
+    g.energy = 20000;  // above restThreshold, below restExit
+    fsm->tick(50 + ActivityFsm::kReactingMaxDwellMs + 1, g);
+    TEST_ASSERT_EQUAL(Activity::Idle, fsm->state());
+    fsm->tick(60 + ActivityFsm::kReactingMaxDwellMs + 1, g);
+  }
+  TEST_ASSERT_EQUAL(Activity::Idle, plain.state());
+  TEST_ASSERT_EQUAL(Activity::Resting, tuned.state());
+}
+
 void setUp() {}
 void tearDown() {}
 
@@ -166,5 +209,6 @@ int main() {
   RUN_TEST(guards_and_reasons);
   RUN_TEST(timeout_and_wrap);
   RUN_TEST(guarded_exits);
+  RUN_TEST(lab_knobs_wake_energy_and_resume_rest);
   return UNITY_END();
 }

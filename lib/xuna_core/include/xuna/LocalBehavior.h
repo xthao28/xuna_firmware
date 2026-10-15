@@ -7,8 +7,13 @@ class LocalBehavior {
   void activity(uint32_t now){activityAt_=now;}
   // Quiet-time routine uses learned preference without a phone or wall clock.
   bool choose(uint32_t now,bool idle,const LifeEngine& life,uint8_t& action){
+    return choosePreferred(now,idle,life.choose(0),action);
+  }
+  // Same routine with the preferred quiet action supplied by the caller (the
+  // board trial passes learner v3's greedy quiet action).
+  bool choosePreferred(uint32_t now,bool idle,uint8_t preferred,uint8_t& action){
     if(!idle||uint32_t(now-activityAt_)<60000)return false;
-    activityAt_=now;action=life.choose(0);return true;
+    activityAt_=now;action=preferred;return true;
   }
 };
 }

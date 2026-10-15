@@ -61,6 +61,19 @@ struct TransitionResult {
       : ok(success), reason(why), from(source), to(target), timedOut(timeout) {}
 };
 
+// Energy thresholds in Q0.16 [P]. Defaults equal the M04 placeholders
+// (ActivityFsm::kPlayMin etc.); Life Lab can try other values.
+struct ActivityThresholds {
+  uint16_t playMin = 32768;
+  uint16_t restThreshold = 16384;
+  uint16_t restExit = 24576;
+  uint16_t sleepThreshold = 8192;
+  // Leave Sleeping once energy reaches this level (0 = explicit wake only).
+  uint16_t wakeEnergy = 0;
+  // After input interrupts Resting, return to Resting until restExit.
+  bool resumeInterruptedRest = false;
+};
+
 // Small, table-driven activity state machine. It owns no side effects and is
 // intended to be driven by the single device loop; renderers and persistence
 // observe the resulting state elsewhere.
@@ -70,6 +83,11 @@ class ActivityFsm {
   static constexpr uint16_t kRestThreshold = 16384;
   static constexpr uint16_t kRestExit = 24576;
   static constexpr uint16_t kSleepThreshold = 8192;
+
+  explicit ActivityFsm(const ActivityThresholds& thresholds =
+                           ActivityThresholds())
+      : thresholds_(thresholds) {}
+  const ActivityThresholds& thresholds() const { return thresholds_; }
 
   // Proposed M04 placeholder dwell values. Zero means the state is released
   // by an explicit guard/event rather than by a timer.
@@ -114,7 +132,7 @@ class ActivityFsm {
           result.reason = TransitionReason::GuardWake;
           return result;
         }
-        if (from == Activity::Resting && guards.energy < kRestExit) {
+        if (from == Activity::Resting && guards.energy < thresholds_.restExit) {
           result.reason = TransitionReason::GuardEnergy;
           return result;
         }
@@ -137,13 +155,13 @@ class ActivityFsm {
         }
         break;
       case Activity::Playing:
-        if (guards.energy < kPlayMin) {
+        if (guards.energy < thresholds_.playMin) {
           result.reason = TransitionReason::GuardEnergy;
           return result;
         }
         break;
       case Activity::Resting:
-        if (guards.energy >= kRestThreshold) {
+        if (guards.energy >= thresholds_.restThreshold) {
           result.reason = TransitionReason::GuardEnergy;
           return result;
         }
@@ -168,15 +186,22 @@ class ActivityFsm {
   // Applies timer exits and energy/wake exits. Returns true when state changed.
   bool tick(MonoMs now, const ActivityGuards& guards = ActivityGuards()) {
     if (state_ == Activity::Idle) {
-      if (guards.energy < kSleepThreshold)
+      if (guards.energy < thresholds_.sleepThreshold)
         return timeoutTo(Activity::Sleeping, now);
-      if (guards.energy < kRestThreshold)
+      if (guards.energy < thresholds_.restThreshold)
         return timeoutTo(Activity::Resting, now);
+      if (restInterrupted_ && thresholds_.resumeInterruptedRest &&
+          guards.energy < thresholds_.restExit)
+        return timeoutTo(Activity::Resting, now);
+      if (guards.energy >= thresholds_.restExit) restInterrupted_ = false;
       return false;
     }
-    if (state_ == Activity::Resting && guards.energy >= kRestExit)
+    if (state_ == Activity::Resting && guards.energy >= thresholds_.restExit)
       return timeoutTo(Activity::Idle, now);
-    if (state_ == Activity::Sleeping && guards.explicitWake)
+    if (state_ == Activity::Sleeping &&
+        (guards.explicitWake ||
+         (thresholds_.wakeEnergy != 0 &&
+          guards.energy >= thresholds_.wakeEnergy)))
       return timeoutTo(Activity::Idle, now);
     if (state_ == Activity::EvolutionTransition && guards.evolutionComplete)
       return timeoutTo(Activity::Idle, now);
@@ -243,6 +268,11 @@ class ActivityFsm {
 
  private:
   void enter(Activity state, MonoMs now) {
+    // Input that pulls XUNA out of Resting (e.g. into Reacting) marks the
+    // rest as interrupted; entering Resting again clears the mark.
+    if (state_ == Activity::Resting && state != Activity::Idle)
+      restInterrupted_ = true;
+    if (state == Activity::Resting) restInterrupted_ = false;
     state_ = state;
     enteredAt_ = now;
   }
@@ -254,6 +284,8 @@ class ActivityFsm {
     return true;
   }
 
+  ActivityThresholds thresholds_;
+  bool restInterrupted_ = false;
   Activity state_ = Activity::Booting;
   MonoMs enteredAt_ = 0;
 };

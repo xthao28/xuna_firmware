@@ -11,8 +11,11 @@ xuna::InputManager input;
 xuna::AnimationManager animation;
 xuna::LifeEngine life;
 xuna::LocalBehavior localBehavior;
-xuna::ActivityFsm activity;
-xuna::Needs needs;
+// Life-feel values approved for a board trial (2026-10-15).
+xuna::ActivityFsm activity(xuna::lifeFeelThresholds());
+xuna::Needs needs(xuna::lifeFeelTuning());
+// Board trial (2026-10-15): learner v3 decides, v1 stays the durable record.
+xuna::BoardLearner learner(1);
 uint32_t bleActivityAt = 0;
 xuna::LifeStorage storage;
 xuna::BleManager ble;
@@ -59,6 +62,10 @@ void setup() {
   input.begin(now); animation.begin(now); needs.reset(now); diagnosticsAt = now;
   const bool storageReady=storage.begin(life);
   if (!storageReady) Serial.println("ERROR: life storage unavailable");
+  learner.reseed((uint64_t(esp_random()) << 32) | esp_random());
+  learner.restore(life);
+  Serial.printf("learner=v3-ucb (board trial) preferred quiet=%u play=%u\n",
+                learner.preferred(0), learner.preferred(1));
   xuna::ActivityGuards boot; boot.restoreOk=storageReady; boot.energy=needs.state().energy;
   activity.request(storageReady ? xuna::Activity::Idle : xuna::Activity::ErrorSafe,boot,now);
   syncActivityVisual(now);
@@ -80,7 +87,7 @@ void loop() {
   xuna::ActivityGuards tickGuards; tickGuards.energy=needs.state().energy; tickGuards.restoreOk=true;
   if (activity.tick(now,tickGuards)) syncActivityVisual(now);
   if (bleReady) {
-    ble.update(animation, life, storage, activity, needs, now, displayReady);
+    ble.update(animation, life, learner, storage, activity, needs, now, displayReady);
     if (ble.activityAt() != bleActivityAt) {
       bleActivityAt = ble.activityAt(); localBehavior.activity(now);
     }
@@ -94,7 +101,7 @@ void loop() {
   }
   if (events.happy || events.idle) localBehavior.activity(now);
   uint8_t quietAction = 0;
-  if (localBehavior.choose(now, activity.state() == xuna::Activity::Idle, life, quietAction))
+  if (localBehavior.choosePreferred(now, activity.state() == xuna::Activity::Idle, learner.preferred(0), quietAction))
     ble.requestLocalAction(animation,activity,needs,static_cast<xuna::ActionId>(quietAction),now);
   syncActivityVisual(now);
   animation.update(now);

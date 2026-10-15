@@ -135,6 +135,21 @@ void mood_axes_clamp() {
   TEST_ASSERT_EQUAL_INT16(-32768, mood.state().valence);
 }
 
+void spend_and_stimulate_are_bounded() {
+  Needs needs;
+  needs.reset(0);
+  needs.spend(4096);
+  TEST_ASSERT_EQUAL_UINT16(65535 - 4096, needs.state().energy);
+  needs.spend(65535);
+  TEST_ASSERT_EQUAL_UINT16(0, needs.state().energy);
+  needs.stimulate(40000);
+  needs.stimulate(40000);
+  TEST_ASSERT_EQUAL_UINT16(65535, needs.state().stimulation);
+  // Defaults: interactions neither cost energy nor stimulate.
+  TEST_ASSERT_EQUAL_UINT8(0, LifeTuning().actionCostPercent);
+  TEST_ASSERT_EQUAL_UINT16(0, LifeTuning().stimulationPerInteraction);
+}
+
 void setUp() {}
 void tearDown() {}
 int main() {
@@ -145,5 +160,6 @@ int main() {
   RUN_TEST(recovery_rises_clamps_and_is_partition_invariant);
   RUN_TEST(mood_hysteresis);
   RUN_TEST(mood_axes_clamp);
+  RUN_TEST(spend_and_stimulate_are_bounded);
   return UNITY_END();
 }

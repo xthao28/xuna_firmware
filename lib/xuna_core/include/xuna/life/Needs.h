@@ -16,6 +16,12 @@ struct LifeTuning {
   // (Resting/Sleeping). Placeholder: about four minutes of Resting.
   uint16_t energyRecoveryPerMinute = 2048;
   uint32_t decayPeriodMs = 60000;
+  // Life Lab knobs [P]; defaults keep the shipped behaviour (no change).
+  // Stimulation added per accepted interaction (0 = interactions never raise
+  // stimulation) and the share of an accepted action's registry energy cost
+  // that is spent (0 = actions never spend energy, 100 = full cost).
+  uint16_t stimulationPerInteraction = 0;
+  uint8_t actionCostPercent = 0;
 };
 
 struct NeedsState {
@@ -57,6 +63,21 @@ class Needs {
           stimulationRemainder_);
   }
 
+  // Event-driven changes, bounded at 0 and 65535. Callers decide when an
+  // event counts (e.g. only accepted actions).
+  void spend(uint16_t amount) {
+    state_.energy = amount >= state_.energy
+                        ? 0
+                        : static_cast<uint16_t>(state_.energy - amount);
+  }
+  void stimulate(uint16_t amount) {
+    const uint32_t room = 65535U - state_.stimulation;
+    state_.stimulation = amount >= room
+                             ? 65535
+                             : static_cast<uint16_t>(state_.stimulation + amount);
+  }
+
+  const LifeTuning& tuning() const { return tuning_; }
   const NeedsState& state() const { return state_; }
   Q0_16 energy() const { return Q0_16::fromRaw(state_.energy); }
   Q0_16 stimulation() const { return Q0_16::fromRaw(state_.stimulation); }

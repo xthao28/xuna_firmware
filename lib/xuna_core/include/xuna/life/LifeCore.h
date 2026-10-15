@@ -7,8 +7,10 @@
 #include <xuna/life/ActionGate.h>
 #include <xuna/life/ActivityFsm.h>
 #include <xuna/life/Needs.h>
+#include <xuna/learning/LearnerVocabulary.h>
 #include <xuna/learning/LearningBridgeV3.h>
 #include <xuna/life/LifeCommit.h>
+#include <xuna/life/LifeFeel.h>
 #include <xuna/visual/VisualIntent.h>
 
 namespace xuna {
@@ -78,10 +80,16 @@ struct LifeCoreStepOutput {
 // request; storage and BLE remain adapters.
 class LifeCore {
  public:
-  explicit LifeCore(uint64_t seed = 1, uint64_t stream = 3)
+  // Defaults are the approved life-feel values (same as the production
+  // firmware); Life Lab can pass other tuning.
+  explicit LifeCore(uint64_t seed = 1, uint64_t stream = 3,
+                    const LifeTuning& tuning = lifeFeelTuning(),
+                    const ActivityThresholds& thresholds = lifeFeelThresholds())
       : candidate_(shadowConfig()),
         random_(seed, stream),
-        bridge_(life_, candidate_, random_) {
+        bridge_(life_, candidate_, random_),
+        activity_(thresholds),
+        needs_(tuning) {
     mood_.reset();
   }
 
@@ -93,7 +101,7 @@ class LifeCore {
     pendingValid_ = false;
     gate_.reset();
     lastVisual_ = VisualIntent::Unknown;
-    activity_ = ActivityFsm();
+    activity_ = ActivityFsm(activity_.thresholds());
     ActivityGuards guards;
     guards.restoreOk = restoreOk;
     guards.energy = needs_.state().energy;
@@ -158,18 +166,7 @@ class LifeCore {
   // Shadow candidate configuration: Life Lab sweep winner (2026-10-15), all
   // values Proposed. Actions 0/1 match the v1 domain until D5; day part stays
   // unknown until trusted time (S10).
-  static LearnerV3Config shadowConfig() {
-    LearnerV3Config config;
-    config.interactions = 2;
-    config.dayParts = LearnerV3Config::kMaxDayParts;
-    config.actions = 2;
-    config.policy = ExplorePolicy::Ucb;
-    config.gammaQ16 = 58982;          // 0.90
-    config.priorStrengthQ16 = 65536;  // k = 1
-    config.fineMinQ16 = 65536;        // m = 1
-    config.ucbBonusQ16 = 9830;        // 0.15
-    return config;
-  }
+  static LearnerV3Config shadowConfig() { return v1CompatibleLearnerConfig(); }
   const ActivityFsm& activity() const { return activity_; }
 
   // Urgent-commit port (plan §9.5). Not owned. Null keeps the legacy
@@ -230,6 +227,7 @@ class LifeCore {
     if (!outcome.accepted) return false;
     lastVisual_ = outcome.visual;
     lastVisualActivity_ = activity_.state();
+    applyAcceptedAction(needs_, action);
     return true;
   }
 

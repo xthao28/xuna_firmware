@@ -7,8 +7,17 @@
 #include <xuna/AnimationManager.h>
 #include <xuna/BleProtocol.h>
 #include <xuna/life/ActionGate.h>
+#include <xuna/life/LifeFeel.h>
+#include <xuna/learning/BoardLearner.h>
 #include "LifeStorage.h"
 namespace xuna {
+// Urgent-commit adapter: the existing v1 snapshot store is the durable
+// record for the board trial (plan §9.5 commit-first).
+struct StorageCommit : ILifeCommit {
+  LifeStorage& storage;
+  explicit StorageCommit(LifeStorage& s):storage(s){}
+  bool commit(LifeEngine& staged) override {return storage.save(staged);}
+};
 class BleManager {
   static constexpr const char* kService="7a6e0001-8c44-4db6-9f61-2b7d5300a101";
   struct Packet { uint8_t bytes[12];size_t size;uint32_t session; };
@@ -74,6 +83,7 @@ class BleManager {
     const ActionOutcome outcome=gate_.request(id,0,activity,needs.state().energy,now);
     // A validator pass refused by an FSM guard is reported as busy (5).
     if(!outcome.accepted){result=outcome.reason==ValidationReason::Accepted?5:validationResult(outcome.reason);return false;}
+    applyAcceptedAction(needs,id);
     animation.setIntent(outcome.visual,0,now);
     result=0;return true;
   }
@@ -99,8 +109,9 @@ class BleManager {
     if(accepted) { invalidateDecision(); activityAt_=now; }
     return accepted;
   }
-  void update(AnimationManager& animation,LifeEngine& life,LifeStorage& storage,
-              ActivityFsm& activity,Needs& needs,uint32_t now,bool ready) {
+  void update(AnimationManager& animation,LifeEngine& life,BoardLearner& learner,
+              LifeStorage& storage,ActivityFsm& activity,Needs& needs,uint32_t now,
+              bool ready) {
     const auto session=session_.load();
     if(session!=seenSession_){cache_.clear();decision_=0;feedbackUsed_=true;seenSession_=session;}
     if(connected_)advertising_=false;
@@ -117,25 +128,30 @@ class BleManager {
             if(requestAction(c.arg,animation,activity,needs,now,result)) { invalidateDecision(); activityAt_=now; }
           }
           if(c.opcode==2){
-            const uint8_t selected=life.choose(c.arg);
+            // Board trial: learner v3 chooses; v1 stays the durable record.
+            const uint8_t selected=learner.choose(c.arg);
             // Commit context with the decision only: a rejected choice must not
             // retarget feedback for the previous accepted decision.
             if(requestAction(selected,animation,activity,needs,now,result)) {
               context_=c.arg; action_=selected; decision_=c.id; feedbackUsed_=false; activityAt_=now;
+              learner.accept();
             }
           }
           if(c.opcode==3){
             if(c.target!=decision_||feedbackUsed_)result=4;
-            else {LifeEngine candidate=life;candidate.feedback(context_,action_,c.arg==1,c.source);if(storage.save(candidate)){life=candidate;feedbackUsed_=true;}else result=7;}
+            else {StorageCommit commit(storage);
+              const auto applied=learner.feedback(life,c.arg==1,c.source,commit);
+              if(applied==BoardLearner::Result::Applied)feedbackUsed_=true;
+              else result=applied==BoardLearner::Result::CommitFailed?7:4;}
           }
-          if(c.opcode==4){if(!storage.clear(life))result=7;decision_=0;feedbackUsed_=true;}
+          if(c.opcode==4){if(!storage.clear(life))result=7;else learner.forget();decision_=0;feedbackUsed_=true;}
         }
         if(c.id)cache_.remember(p.bytes,p.size,result);
       }
       reply=true;replyId=c.id;replyResult=result;
     }
     uint8_t b[20]={1,20,context_,action_};LifeEngine::put32(b+4,life.activeSeconds);LifeEngine::put32(b+8,life.eventCount);LifeEngine::put32(b+12,decision_);
-    b[16]=life.choose(0);b[17]=life.choose(1);b[18]=feedbackUsed_?0:1;b[19]=life.episodeCount;if(std::memcmp(lastLife_,b,sizeof(b))){std::memcpy(lastLife_,b,sizeof(b));lifeStatus_->setValue(b,sizeof(b));}
+    b[16]=learner.preferred(0);b[17]=learner.preferred(1);b[18]=feedbackUsed_?0:1;b[19]=life.episodeCount;if(std::memcmp(lastLife_,b,sizeof(b))){std::memcpy(lastLife_,b,sizeof(b));lifeStatus_->setValue(b,sizeof(b));}
     for(int page=0;page<2;++page){
       uint8_t memory[20]={1,0,static_cast<uint8_t>(page),0};
       for(int i=0;i<4;++i){const int index=page*4+i;if(index>=life.episodeCount)break;
