@@ -12,8 +12,10 @@ c++ -std=c++11 -Wall -Wextra -Werror -Ilib/xuna_core/include \
 ```
 
 Supported trace verbs are `choose`, `feedback`, `button`, `cmd`, `reboot` and
-`powercut`. A feedback that produces `persistRequested` is committed through
-the in-memory A/B snapshot lab. `powercut` arms the next commit to fail, and
+`powercut`. The snapshot lab is LifeCore's committer (plan §9.5): feedback is
+committed to the in-memory A/B slots before it is applied, and a failed commit
+leaves RAM unchanged with the decision still pending. `powercut` arms the next
+commit to fail, and
 `reboot` recovers the newest valid committed slot. The CSV reports requests,
 failures, reboot count, final event count and generation.
 

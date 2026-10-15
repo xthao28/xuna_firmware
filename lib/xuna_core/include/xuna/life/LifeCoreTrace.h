@@ -118,7 +118,15 @@ class LifeCoreTraceRunner {
       ++report.processed;
       if (report.finalOutput.core.learningFeedbackApplied)
         ++report.feedbackApplied;
-      if (report.finalOutput.core.persistRequested) {
+      // The lab is LifeCore's committer (§9.5): feedback is committed before
+      // it is applied, and a failed commit leaves RAM unchanged.
+      const LifeCoreStepOutput& core = report.finalOutput.core;
+      if (core.feedbackCommitted) ++report.persistRequests;
+      if (core.feedbackNotReady) {
+        ++report.persistRequests;
+        ++report.persistFailures;
+      }
+      if (core.persistRequested) {
         ++report.persistRequests;
         if (!lab.persist()) ++report.persistFailures;
       }

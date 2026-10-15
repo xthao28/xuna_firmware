@@ -1,4 +1,4 @@
-# lifecore_lab: power cut on the 4th commit, 5th commit succeeds, reboot. Expect event_count 5, generation 4 (RAM carried the failed feedback).
+# lifecore_lab: power cut on the 4th commit, 5th commit succeeds, reboot. §9.5: the failed feedback never reaches RAM, so event_count 4, generation 4.
 @+5000 choose 1 0
 @+5500 feedback 1 positive 1
 @+10000 choose 2 0

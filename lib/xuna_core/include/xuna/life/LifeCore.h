@@ -7,7 +7,8 @@
 #include <xuna/life/ActionGate.h>
 #include <xuna/life/ActivityFsm.h>
 #include <xuna/life/Needs.h>
-#include <xuna/learning/LearningBridge.h>
+#include <xuna/learning/LearningBridgeV3.h>
+#include <xuna/life/LifeCommit.h>
 #include <xuna/visual/VisualIntent.h>
 
 namespace xuna {
@@ -61,6 +62,8 @@ struct LifeCoreStepOutput {
   bool actionAccepted = false;
   bool learningFeedbackApplied = false;
   bool persistRequested = false;
+  bool feedbackCommitted = false;  // urgent commit done before applying
+  bool feedbackNotReady = false;   // commit failed; RAM unchanged (§9.5)
   bool hasDecision = false;
   uint32_t decisionId = 0;
   uint8_t baselineAction = 0;
@@ -69,19 +72,24 @@ struct LifeCoreStepOutput {
 };
 
 // M04 composition seam. It keeps the v1 LifeEngine authoritative while the
-// v2 learner observes the same decisions through LearningBridge. Persistence
-// is represented as an output request; storage and BLE remain adapters.
+// v3 learner (plan §9.3, tuned Proposed values) observes the same decisions
+// through LearningBridgeV3 as a shadow candidate. The candidate resets on
+// boot until persistence v2 exists. Persistence is represented as an output
+// request; storage and BLE remain adapters.
 class LifeCore {
  public:
   explicit LifeCore(uint64_t seed = 1, uint64_t stream = 3)
-      : random_(seed, stream), bridge_(life_, candidate_, random_) {
+      : candidate_(shadowConfig()),
+        random_(seed, stream),
+        bridge_(life_, candidate_, random_) {
     mood_.reset();
   }
 
   bool begin(MonoMs now, bool restoreOk) {
     needs_.reset(now);
     mood_.reset();
-    candidate_.reset();
+    candidate_.reset(shadowConfig());
+    bridge_.resetMetrics();
     pendingValid_ = false;
     gate_.reset();
     lastVisual_ = VisualIntent::Unknown;
@@ -141,9 +149,32 @@ class LifeCore {
 
   const LifeEngine& life() const { return life_; }
   LifeEngine& life() { return life_; }
-  const PreferenceLearnerV2& candidate() const { return candidate_; }
-  PreferenceLearnerV2& candidate() { return candidate_; }
+  const PreferenceLearnerV3& candidate() const { return candidate_; }
+  PreferenceLearnerV3& candidate() { return candidate_; }
+  const LearningBridgeV3Metrics& shadowMetrics() const {
+    return bridge_.metrics();
+  }
+
+  // Shadow candidate configuration: Life Lab sweep winner (2026-10-15), all
+  // values Proposed. Actions 0/1 match the v1 domain until D5; day part stays
+  // unknown until trusted time (S10).
+  static LearnerV3Config shadowConfig() {
+    LearnerV3Config config;
+    config.interactions = 2;
+    config.dayParts = LearnerV3Config::kMaxDayParts;
+    config.actions = 2;
+    config.policy = ExplorePolicy::Ucb;
+    config.gammaQ16 = 58982;          // 0.90
+    config.priorStrengthQ16 = 65536;  // k = 1
+    config.fineMinQ16 = 65536;        // m = 1
+    config.ucbBonusQ16 = 9830;        // 0.15
+    return config;
+  }
   const ActivityFsm& activity() const { return activity_; }
+
+  // Urgent-commit port (plan §9.5). Not owned. Null keeps the legacy
+  // apply-then-persistRequested path for adapter-free tests.
+  void setCommitter(ILifeCommit* commit) { commit_ = commit; }
 
   static constexpr uint8_t kMaxEvents = 8;
 
@@ -157,8 +188,8 @@ class LifeCore {
         if (output.actionAccepted) signals.interaction = true;
         return;
       case LifeCoreEventKind::Choose: {
-        const LearningBridgeDecision decision =
-            bridge_.choose(event.context, event.id, now);
+        const LearningBridgeV3Decision decision =
+            bridge_.choose(event.context, 0, event.id, now);
         if (decision.candidate.id == 0) return;
         output.selectedAction = decision.baselineAction;
         output.actionAccepted = requestAction(decision.baselineAction, 0, now);
@@ -169,16 +200,27 @@ class LifeCore {
         pendingValid_ = true;
         return;
       }
-      case LifeCoreEventKind::Feedback:
+      case LifeCoreEventKind::Feedback: {
         if (!pendingValid_ || event.id != pending_.id) return;
-        if (bridge_.feedback(pending_, event.approved, event.source, now)) {
-          pendingValid_ = false;
-          output.learningFeedbackApplied = true;
-          output.persistRequested = true;
-          signals.positiveFeedback = event.approved;
-          signals.negativeFeedback = !event.approved;
+        const LearningBridgeV3::Result result = bridge_.feedback(
+            pending_, event.approved, event.source, now, commit_);
+        if (result == LearningBridgeV3::Result::CommitFailed) {
+          // §9.5: nothing changed in RAM; the decision stays pending so the
+          // owner can retry; the adapter reports not_ready (BLE result 7).
+          output.feedbackNotReady = true;
+          return;
         }
+        if (result != LearningBridgeV3::Result::Applied) return;
+        pendingValid_ = false;
+        output.learningFeedbackApplied = true;
+        // With a committer the change is already durable; without one the
+        // adapter must persist it afterwards (legacy lab path).
+        output.feedbackCommitted = commit_ != 0;
+        output.persistRequested = commit_ == 0;
+        signals.positiveFeedback = event.approved;
+        signals.negativeFeedback = !event.approved;
         return;
+      }
     }
   }
 
@@ -208,14 +250,15 @@ class LifeCore {
 
   bool started_ = false;
   LifeEngine life_;
-  PreferenceLearnerV2 candidate_;
+  PreferenceLearnerV3 candidate_;
   Pcg32 random_;
-  LearningBridge bridge_;
+  LearningBridgeV3 bridge_;
   ActivityFsm activity_;
   Needs needs_;
   Mood mood_;
-  LearningBridgeDecision pending_;
+  LearningBridgeV3Decision pending_;
   bool pendingValid_ = false;
+  ILifeCommit* commit_ = 0;
   ActionGate gate_;
   VisualIntent lastVisual_ = VisualIntent::Unknown;
   Activity lastVisualActivity_ = Activity::Booting;

@@ -47,12 +47,24 @@ Results are recorded in
 ## Closed-loop learning bench
 
 `learning_bench.cpp` runs the simulated owner (`xuna/lab/OwnerModel.h`) against
-random, static, v1 and v2 learners (`xuna/lab/LearnerBench.h`) for the §9.9
-scenarios plus drift, noisy, sparse and 4-action cases:
+random, static, v1, v2 and v3 (greedy, A ε, C UCB, D progress) learners (`xuna/lab/LearnerBench.h`) for the §9.9
+scenarios plus drift, noisy, sparse, 4-action and day-part cases:
 
 ```text
 g++ -std=c++11 -Wall -Wextra -Werror -O2 -Ilib/xuna_core/include sim/learning_bench.cpp -o learning_bench
-./learning_bench [--seeds N] [--curves]
+./learning_bench [--seeds N] [--gamma G] [--curves]
 ```
 
 Results: [life-lab-phase0-2026-10-15.md](../../docs/roadmap/life-lab-phase0-2026-10-15.md).
+Learner v3 results: [learner-v3-phase1-2026-10-15.md](../../docs/roadmap/learner-v3-phase1-2026-10-15.md).
+
+## Learner v3 parameter sweep
+
+`learner_sweep.cpp` runs a grid of v3 configurations (UCB γ/k/m/bonus, ε-greedy
+and learning-progress variants) over 8 scenarios and prints mean regret per
+scenario, noisy flips and late-context generalization:
+
+```text
+g++ -std=c++11 -Wall -Wextra -Werror -O2 -Ilib/xuna_core/include sim/learner_sweep.cpp -o learner_sweep
+./learner_sweep [--seeds N]
+```

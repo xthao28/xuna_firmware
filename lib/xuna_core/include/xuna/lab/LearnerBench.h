@@ -7,6 +7,7 @@
 #include <xuna/base/Random.h>
 #include <xuna/lab/OwnerModel.h>
 #include <xuna/learning/PreferenceLearnerV2.h>
+#include <xuna/learning/PreferenceLearnerV3.h>
 
 namespace xuna {
 
@@ -152,11 +153,77 @@ class V2BenchLearner : public IBenchLearner {
   LearningDecision decision_;
 };
 
+// Learner v3 candidate (plan §9.3/§9.4). With four bench contexts it uses the
+// hierarchy: context c = interaction c/2, day part 1 + c%2. Otherwise each
+// bench context is an interaction with unknown day part (coarse cells only).
+class V3BenchLearner : public IBenchLearner {
+ public:
+  explicit V3BenchLearner(ExplorePolicy policy = ExplorePolicy::EpsilonGreedy,
+                          uint32_t gammaQ16 = 62259)
+      : random_(1, 3) {
+    base_.policy = policy;
+    base_.gammaQ16 = gammaQ16;
+  }
+  // Full parameter template (k, m, ε, gain, feedbackAware); shape is set per
+  // scenario in reset().
+  explicit V3BenchLearner(const LearnerV3Config& base)
+      : base_(base), random_(1, 3) {}
+
+  void reset(uint8_t contexts, uint8_t actions, uint64_t seed) override {
+    LearnerV3Config config = base_;
+    hierarchical_ = contexts == 4;
+    config.interactions = hierarchical_ ? 2 : contexts;
+    config.dayParts = LearnerV3Config::kMaxDayParts;
+    config.actions = actions;
+    learner_.reset(config);
+    random_ = Pcg32(seed, 3);
+    nextId_ = 1;
+    decision_ = V3Decision();
+  }
+  uint8_t choose(uint8_t context, uint32_t) override {
+    decision_ = learner_.choose(interaction(context), dayPart(context),
+                                nextId_++, 0xFF, random_);
+    return decision_.action;
+  }
+  void feedback(bool approved, uint32_t) override {
+    learner_.feedback(decision_, approved);
+  }
+  uint16_t predictQ16(uint8_t context, uint8_t action) const override {
+    return learner_.view(interaction(context), dayPart(context), action).pQ16;
+  }
+  uint8_t greedy(uint8_t context) const override {
+    return learner_.greedy(interaction(context), dayPart(context));
+  }
+  uint32_t stateHash() const override { return learner_.fingerprint(); }
+  bool supports(uint8_t contexts, uint8_t actions) const override {
+    return (contexts <= LearnerV3Config::kMaxInteractions || contexts == 4) &&
+           actions <= LearnerV3Config::kMaxActions;
+  }
+
+ private:
+  uint8_t interaction(uint8_t context) const {
+    return hierarchical_ ? static_cast<uint8_t>(context / 2) : context;
+  }
+  uint8_t dayPart(uint8_t context) const {
+    return hierarchical_ ? static_cast<uint8_t>(1 + context % 2) : 0;
+  }
+
+  LearnerV3Config base_;
+  PreferenceLearnerV3 learner_;
+  Pcg32 random_;
+  uint32_t nextId_ = 1;
+  V3Decision decision_;
+  bool hierarchical_ = false;
+};
+
 struct BenchConfig {
   uint32_t trials = 120;
   uint32_t lastWindow = 20;
   // Consecutive trials with a correct greedy action that count as "learned".
   uint32_t stableRun = 6;
+  // Before this trial only even contexts occur (e.g. one day part), so a
+  // later context tests generalization from the shared prior. 0 = off.
+  uint32_t lateContextsFrom = 0;
 };
 
 struct BenchResult {
@@ -171,6 +238,9 @@ struct BenchResult {
   uint64_t brierQ32 = 0;           // Σ (prediction − outcome)^2, rated trials
   uint64_t baselineBrierQ32 = 0;   // same for a constant 0.5 prediction
   bool stateUnchanged = false;     // learner state equals a fresh learner
+  // Greedy correct on the first 10 appearances of late (odd) contexts.
+  uint32_t lateCorrect = 0;
+  uint32_t lateSeen = 0;
 };
 
 class LearnerBench {
@@ -198,11 +268,16 @@ class LearnerBench {
     result.trialsToTarget = kNever;
 
     for (uint32_t trial = 0; trial < config.trials; ++trial) {
-      const uint8_t context = static_cast<uint8_t>(trial % oc.contexts);
+      const uint8_t context = contextFor(trial, oc.contexts, config);
       const uint8_t best = owner.bestAction(trial, context);
       const uint8_t greedy = learner.greedy(context);
       const bool correct = greedy == best;
       if (greedyCorrect) greedyCorrect[trial] = correct ? 1 : 0;
+      if (config.lateContextsFrom != 0 && trial >= config.lateContextsFrom &&
+          (context % 2U) == 1U && result.lateSeen < 10) {
+        ++result.lateSeen;
+        if (correct) ++result.lateCorrect;
+      }
 
       if (trial >= start && !reached) {
         run = correct ? run + 1 : 0;
@@ -242,6 +317,13 @@ class LearnerBench {
   }
 
  private:
+  static uint8_t contextFor(uint32_t trial, uint8_t contexts,
+                            const BenchConfig& config) {
+    if (trial < config.lateContextsFrom && contexts >= 2)
+      return static_cast<uint8_t>((trial % (contexts / 2U)) * 2U);
+    return static_cast<uint8_t>(trial % contexts);
+  }
+
   // Trial from which the owner's best action is the final one. For drift the
   // best action flips when the drift passes its midpoint.
   static uint32_t changePoint(const OwnerConfig& config) {

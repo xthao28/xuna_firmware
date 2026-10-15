@@ -1,4 +1,4 @@
-# lifecore_lab: power cut on the 4th commit, then reboot. Expect 1 persist failure; recovered event_count 3, generation 3.
+# lifecore_lab: power cut on the 4th commit, then reboot. §9.5: the failed feedback is not applied (feedback_applied 3); recovered event_count 3, generation 3.
 @+5000 choose 1 0
 @+5500 feedback 1 positive 1
 @+10000 choose 2 0

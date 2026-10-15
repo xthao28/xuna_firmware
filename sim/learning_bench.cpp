@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <vector>
 
@@ -78,6 +79,29 @@ std::vector<Scenario> scenarios() {
     s.owner.preferred[1] = 2;
     list.push_back(s);
   }
+  {
+    // Four contexts = 2 interactions x 2 day parts. Interaction 0 prefers
+    // action 1 in both day parts; interaction 1 differs by day part.
+    Scenario s = {"dayparts", base(), trials(160)};
+    s.owner.contexts = 4;
+    s.owner.preferred[0] = 1;
+    s.owner.preferred[1] = 1;
+    s.owner.preferred[2] = 0;
+    s.owner.preferred[3] = 1;
+    list.push_back(s);
+  }
+  {
+    // Day parts agree; the second day part appears only from trial 80, so
+    // the first answers there test generalization from the shared prior.
+    Scenario s = {"new_daypart", base(), trials(160)};
+    s.owner.contexts = 4;
+    s.owner.preferred[0] = 1;
+    s.owner.preferred[1] = 1;
+    s.owner.preferred[2] = 0;
+    s.owner.preferred[3] = 0;
+    s.bench.lateContextsFrom = 80;
+    list.push_back(s);
+  }
   return list;
 }
 
@@ -124,8 +148,9 @@ struct LearnerEntry {
 
 void usage() {
   std::fprintf(stderr,
-               "usage: learning_bench [--seeds N] [--curves]\n"
+               "usage: learning_bench [--seeds N] [--gamma G] [--curves]\n"
                "  default: summary CSV for every scenario and learner\n"
+               "  --gamma: v3 discount factor in (0, 1], default 0.95\n"
                "  --curves: per-trial greedy-correct rate instead\n");
 }
 
@@ -133,10 +158,18 @@ void usage() {
 
 int main(int argc, char** argv) {
   uint32_t seeds = 200;
+  uint32_t gammaQ16 = 62259;  // 0.95
   bool curves = false;
   for (int i = 1; i < argc; ++i) {
     if (std::strcmp(argv[i], "--curves") == 0) {
       curves = true;
+    } else if (std::strcmp(argv[i], "--gamma") == 0 && i + 1 < argc) {
+      const double gamma = std::strtod(argv[++i], 0);
+      if (gamma <= 0.0 || gamma > 1.0) {
+        usage();
+        return 2;
+      }
+      gammaQ16 = static_cast<uint32_t>(gamma * 65536.0 + 0.5);
     } else if (std::strcmp(argv[i], "--seeds") == 0 && i + 1 < argc) {
       seeds = static_cast<uint32_t>(std::strtoul(argv[++i], 0, 10));
       if (seeds == 0) seeds = 1;
@@ -150,8 +183,24 @@ int main(int argc, char** argv) {
   StaticBenchLearner fixed;
   V1BenchLearner v1;
   V2BenchLearner v2;
+  V3BenchLearner v3Greedy(ExplorePolicy::Greedy, gammaQ16);
+  V3BenchLearner v3Epsilon(ExplorePolicy::EpsilonGreedy, gammaQ16);
+  V3BenchLearner v3Ucb(ExplorePolicy::Ucb, gammaQ16);
+  V3BenchLearner v3Progress(ExplorePolicy::LearningProgress, gammaQ16);
+  // Best configuration from sim/learner_sweep.cpp (2026-10-15).
+  LearnerV3Config tuned;
+  tuned.policy = ExplorePolicy::Ucb;
+  tuned.gammaQ16 = 58982;          // 0.90
+  tuned.priorStrengthQ16 = 65536;  // k = 1
+  tuned.fineMinQ16 = 65536;        // m = 1
+  tuned.ucbBonusQ16 = 9830;        // 0.15
+  V3BenchLearner v3Tuned(tuned);
   const LearnerEntry learners[] = {
-      {"random", &random}, {"static", &fixed}, {"v1", &v1}, {"v2", &v2}};
+      {"random", &random},        {"static", &fixed},
+      {"v1", &v1},                {"v2", &v2},
+      {"v3_greedy", &v3Greedy},   {"v3_A_eps", &v3Epsilon},
+      {"v3_C_ucb", &v3Ucb},       {"v3_D_progress", &v3Progress},
+      {"v3_C_tuned", &v3Tuned}};
 
   if (curves) {
     std::printf("scenario,learner,trial,greedy_correct_rate\n");
@@ -161,7 +210,7 @@ int main(int argc, char** argv) {
         "regret_ci_high,last20_greedy_mean,last20_greedy_ci_low,"
         "last20_greedy_ci_high,target_reached,target_median,target_p90,"
         "flips_after_target_mean,rated_mean,brier_per_rated,"
-        "baseline_brier_per_rated,state_unchanged_all\n");
+        "baseline_brier_per_rated,state_unchanged_all,late_correct\n");
   }
 
   const std::vector<Scenario> list = scenarios();
@@ -172,7 +221,7 @@ int main(int argc, char** argv) {
       if (!entry.learner->supports(scenario.owner.contexts,
                                    scenario.owner.actions)) {
         if (!curves)
-          std::printf("%s,%s,0,%u,unsupported,,,,,,,,,,,,,\n", scenario.name,
+          std::printf("%s,%s,0,%u,unsupported,,,,,,,,,,,,,,\n", scenario.name,
                       entry.name, count);
         continue;
       }
@@ -180,6 +229,7 @@ int main(int argc, char** argv) {
       std::vector<double> curve(count, 0.0);
       std::vector<uint8_t> trace(count, 0);
       double brier = 0, baseline = 0, ratedTotal = 0;
+      double lateCorrect = 0, lateSeen = 0;
       bool unchanged = true;
       for (uint32_t seed = 1; seed <= seeds; ++seed) {
         const BenchResult r = LearnerBench::run(
@@ -196,6 +246,8 @@ int main(int argc, char** argv) {
         brier += r.brierQ32 / 4294967296.0;
         baseline += r.baselineBrierQ32 / 4294967296.0;
         unchanged = unchanged && r.stateUnchanged;
+        lateCorrect += r.lateCorrect;
+        lateSeen += r.lateSeen;
         for (uint32_t t = 0; t < count; ++t) curve[t] += trace[t];
       }
 
@@ -215,14 +267,15 @@ int main(int argc, char** argv) {
       ratedMean /= rated.size();
       std::printf(
           "%s,%s,%u,%u,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.1f,%.1f,%.2f,"
-          "%.1f,%.4f,%.4f,%s\n",
+          "%.1f,%.4f,%.4f,%s,%.3f\n",
           scenario.name, entry.name, seeds, count, reg.mean, reg.low,
           reg.high, win.mean, win.low, win.high,
           static_cast<double>(target.size()) / seeds,
           percentile(target, 0.5), percentile(target, 0.9), flipMean,
           ratedMean, ratedTotal > 0 ? brier / ratedTotal : NAN,
           ratedTotal > 0 ? baseline / ratedTotal : NAN,
-          unchanged ? "yes" : "no");
+          unchanged ? "yes" : "no",
+          lateSeen > 0 ? lateCorrect / lateSeen : NAN);
     }
   }
   return 0;

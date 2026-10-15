@@ -10,12 +10,17 @@ namespace xuna {
 
 // In-memory A/B persistence harness for Life Lab. It mirrors the existing
 // LifeEngine codec and recovery contract without touching NVS/LittleFS.
-class LifeCoreSnapshotLab {
+class LifeCoreSnapshotLab : public ILifeCommit {
  public:
   static constexpr uint8_t kSlotCount = 2;
 
   explicit LifeCoreSnapshotLab(uint64_t seed = 1, uint64_t stream = 3)
-      : session_(seed, stream) {}
+      : session_(seed, stream) {
+    session_.core().setCommitter(this);
+  }
+  // The session holds a pointer to this lab as its committer.
+  LifeCoreSnapshotLab(const LifeCoreSnapshotLab&) = delete;
+  LifeCoreSnapshotLab& operator=(const LifeCoreSnapshotLab&) = delete;
 
   bool boot(MonoMs now) {
     powerCutNext_ = false;
@@ -27,25 +32,18 @@ class LifeCoreSnapshotLab {
     return true;
   }
 
+  // Lazy commit of the current RAM state (plan §7.6 lazy class, e.g.
+  // activeSeconds). Urgent feedback commits go through commit() instead.
   bool persist() {
     LifeEngine snapshot = session_.core().life();
-    ++snapshot.generation;
-    uint8_t target = 0;
-    if (valid_[0] && valid_[1]) {
-      target = generation_[0] <= generation_[1] ? 0 : 1;
-    } else if (valid_[0]) {
-      target = 1;
-    }
-    if (powerCutNext_) {
-      powerCutNext_ = false;
-      return false;
-    }
-    snapshot.encode(bytes_[target]);
-    valid_[target] = true;
-    generation_[target] = snapshot.generation;
+    if (!write(snapshot)) return false;
     session_.core().life() = snapshot;
     return true;
   }
+
+  // Urgent-commit port used by LifeCore before applying feedback (§9.5).
+  // Stamps the next generation into `staged` like LifeStorage::save.
+  bool commit(LifeEngine& staged) override { return write(staged); }
 
   void powerCutNextPersist() { powerCutNext_ = true; }
   bool reboot(MonoMs now) { return boot(now); }
@@ -66,6 +64,24 @@ class LifeCoreSnapshotLab {
   }
 
  private:
+  bool write(LifeEngine& snapshot) {
+    ++snapshot.generation;
+    uint8_t target = 0;
+    if (valid_[0] && valid_[1]) {
+      target = generation_[0] <= generation_[1] ? 0 : 1;
+    } else if (valid_[0]) {
+      target = 1;
+    }
+    if (powerCutNext_) {
+      powerCutNext_ = false;
+      return false;
+    }
+    snapshot.encode(bytes_[target]);
+    valid_[target] = true;
+    generation_[target] = snapshot.generation;
+    return true;
+  }
+
   bool recover(LifeEngine& output) const {
     const size_t firstSize = valid_[0] ? LifeEngine::kSnapshotSize : 0;
     const size_t secondSize = valid_[1] ? LifeEngine::kSnapshotSize : 0;

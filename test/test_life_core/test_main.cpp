@@ -26,7 +26,7 @@ void core_runs_v1_and_v2_choice_from_existing_state() {
   TEST_ASSERT_EQUAL_UINT8(0, output.baselineAction);
   TEST_ASSERT_TRUE(output.candidateAction <= 1);
   TEST_ASSERT_EQUAL_UINT32(0, core.life().eventCount);
-  TEST_ASSERT_EQUAL_UINT32(0, core.candidate().metrics().feedback);
+  TEST_ASSERT_EQUAL_UINT32(0, core.shadowMetrics().feedbackAccepted);
 }
 
 void core_applies_feedback_once_and_requests_v1_persist() {
@@ -42,13 +42,16 @@ void core_applies_feedback_once_and_requests_v1_persist() {
   TEST_ASSERT_TRUE(applied.persistRequested);
   TEST_ASSERT_FALSE(applied.hasDecision);
   TEST_ASSERT_EQUAL_UINT32(1, core.life().eventCount);
-  TEST_ASSERT_EQUAL_UINT32(1, core.candidate().metrics().feedback);
+  TEST_ASSERT_EQUAL_UINT32(1, core.shadowMetrics().feedbackAccepted);
+  // v3 is credited on the action XUNA showed (v1's), the one the owner rated.
+  TEST_ASSERT_EQUAL_UINT16(1, core.candidate().view(0, 0, 0).rated);
+  TEST_ASSERT_EQUAL_UINT16(0, core.candidate().view(0, 0, 1).rated);
 
   const LifeCoreStepOutput duplicate = core.step({21, &feedback, 1});
   TEST_ASSERT_FALSE(duplicate.learningFeedbackApplied);
   TEST_ASSERT_FALSE(duplicate.persistRequested);
   TEST_ASSERT_EQUAL_UINT32(1, core.life().eventCount);
-  TEST_ASSERT_EQUAL_UINT32(1, core.candidate().metrics().feedback);
+  TEST_ASSERT_EQUAL_UINT32(1, core.shadowMetrics().feedbackAccepted);
 }
 
 void core_rejects_feedback_without_matching_decision() {
