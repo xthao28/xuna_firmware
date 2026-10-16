@@ -4,6 +4,7 @@
 
 #include <xuna/BleProtocol.h>
 #include <xuna/learning/LearnerV3Explanation.h>
+#include <xuna/learning/ExplanationCodec.h>
 #include <xuna/life/LifeCoreSnapshotLab.h>
 
 using namespace xuna;
@@ -164,6 +165,19 @@ void explanation_reports_stated_mass_separately() {
   TEST_ASSERT_TRUE(e.cells[2].statedPositiveQ16 > 0);
 }
 
+void explanation_codec_has_frozen_20_byte_layout() {
+  PreferenceLearnerV3 learner(productLearnerConfig());
+  learner.state(1, 4, 2, true);
+  V3Decision d; d.id=7;d.interaction=1;d.dayPart=4;d.action=2;
+  const V3Explanation e=LearnerV3Explainer::explain(learner,d);
+  uint8_t bytes[ExplanationCodec::kSize]={};
+  TEST_ASSERT_TRUE(ExplanationCodec::encode(e,bytes));
+  const uint8_t expected[20]={1,20,1,4,2,4,0,0,154,0,128,0,128,0,0,0,128,0,0,0};
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(expected,bytes,20);
+  V3Explanation invalid;
+  TEST_ASSERT_FALSE(ExplanationCodec::encode(invalid,bytes));
+}
+
 // ---- LifeSnapshot v2 section 12 ------------------------------------------
 
 void stated_section_roundtrips_and_is_omitted_when_empty() {
@@ -294,6 +308,7 @@ int main() {
   RUN_TEST(opposite_statement_replaces_the_earlier_one);
   RUN_TEST(explicit_ratings_override_a_stated_preference);
   RUN_TEST(explanation_reports_stated_mass_separately);
+  RUN_TEST(explanation_codec_has_frozen_20_byte_layout);
   RUN_TEST(stated_section_roundtrips_and_is_omitted_when_empty);
   RUN_TEST(stated_section_validation);
   RUN_TEST(statement_commits_and_survives_reboot);

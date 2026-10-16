@@ -3,6 +3,7 @@
 #include <initializer_list>
 #include <xuna/LifeEngine.h>
 #include <xuna/BleProtocol.h>
+#include <xuna/LifecycleCodec.h>
 #include <xuna/LocalBehavior.h>
 #include "../fixtures/v1_snapshots.h"
 using namespace xuna;
@@ -107,11 +108,44 @@ void timing() {
  TEST_ASSERT_TRUE(routine.choose(1000000000,true,life,action)); // bounded late tick: one choice
  TEST_ASSERT_TRUE(!routine.choose(1000000000,true,life,action));
 }
+void s10_protocol_extensions() {
+ const uint8_t sync[16]={1,5,0x78,0x56,0x34,0x12,1,0,
+                         0x00,0xf1,0x53,0x65,0xa4,0x01,0,0};
+ TEST_ASSERT_EQUAL_UINT8(2,parseCommand(sync,16).error);
+ const BleCommand command=parseCommand(sync,16,false,true,false);
+ TEST_ASSERT_EQUAL_UINT8(0,command.error);
+ TEST_ASSERT_EQUAL_UINT32(0x12345678,command.id);
+ TEST_ASSERT_EQUAL_UINT32(1700000000,command.utcSeconds);
+ TEST_ASSERT_EQUAL_INT16(420,command.tzOffsetMin);
+ uint8_t badSync[16]={1,5,1,0,0,0,1,1,1,0,0,0,0,0,0,0};
+ TEST_ASSERT_EQUAL_UINT8(4,parseCommand(badSync,16,false,true,false).error);
+ badSync[7]=0;badSync[12]=0x49;badSync[13]=0x03;
+ TEST_ASSERT_EQUAL_UINT8(4,parseCommand(badSync,16,false,true,false).error);
+ const uint8_t hatch[8]={1,7,9,0,0,0,0,0};
+ TEST_ASSERT_EQUAL_UINT8(3,parseCommand(hatch,8).error);
+ TEST_ASSERT_EQUAL_UINT8(0,parseCommand(hatch,8,false,false,true).error);
+}
+void s10_cache_and_lifecycle() {
+ uint8_t sync[16]={1,5,9,0,0,0,1,0,1,0,0,0,0,0,0,0};
+ CommandCache commandCache;commandCache.remember(sync,16,0);
+ TEST_ASSERT_EQUAL_INT(0,commandCache.find(sync,16));
+ sync[8]=2;TEST_ASSERT_EQUAL_INT(6,commandCache.find(sync,16));
+ LifecycleProjection value;value.identity=IdentityWireState::Ready;
+ value.stage=GrowthWireStage::Newborn;value.clock=ClockWireQuality::Synced;
+ value.birth=BirthWireQuality::Synced;value.origin=IdentityWireOrigin::App;
+ value.hasBornAt=true;uint8_t bytes[LifecycleCodec::kSize]={};
+ TEST_ASSERT_TRUE(LifecycleCodec::encode(value,bytes));
+ const uint8_t expected[8]={1,8,1,1,2,2,2,1};
+ TEST_ASSERT_EQUAL_UINT8_ARRAY(expected,bytes,8);
+ value.birth=BirthWireQuality::Unknown;
+ TEST_ASSERT_FALSE(LifecycleCodec::encode(value,bytes));
+}
 void setUp() {}
 void tearDown() {}
 int main() {
  UNITY_BEGIN();
  RUN_TEST(snapshots); RUN_TEST(choices); RUN_TEST(parser);
  RUN_TEST(cache); RUN_TEST(recovery); RUN_TEST(timing);
+ RUN_TEST(s10_protocol_extensions); RUN_TEST(s10_cache_and_lifecycle);
  return UNITY_END();
 }
