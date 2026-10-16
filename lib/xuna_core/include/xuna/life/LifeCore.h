@@ -101,9 +101,8 @@ inline uint8_t learnDayPart(DayPart part) {
 // M04 composition seam (S18 preparation). Learner v3 in the D5 product shape
 // (quiet/play/button_greeting × idle/happy/curious, E10 parameters) decides
 // through ProductLearner, and LifeSnapshot v2 is the durable record. The
-// adapter restores the recovered snapshot before begin() and provides the
-// urgent-commit port; storage and BLE remain adapters. Production firmware
-// still runs v1 + BoardLearner until S13/S18 wiring.
+// production adapter restores the recovered snapshot before begin() and
+// provides the urgent-commit port; storage and BLE remain adapters.
 class LifeCore {
  public:
   // App command IDs stay below this value; device-originated decisions

@@ -82,3 +82,15 @@ python sim/life_sweep.py ./life_timeline
 ```
 
 Results: [life-lab-needs-timeline-2026-10-15.md](../../docs/roadmap/life-lab-needs-timeline-2026-10-15.md).
+
+## Migration check (S13 + S18 preparation)
+
+`migration_check.cpp` compares the board's v1 + `BoardLearner` path with the
+migrated LifeCore path on real v1 snapshots. Extract them read-only from an NVS
+partition dump into a folder outside the backup directory:
+
+```text
+python3 tools/nvs_life_dump.py <nvs.bin> --out-dir <work>
+c++ -std=c++11 -Wall -Wextra -Werror -Ilib/xuna_core/include sim/migration_check.cpp -o migration_check
+./migration_check <work>/slot0.bin <work>/slot1.bin
+```

@@ -10,8 +10,8 @@ struct BleCommand {
 };
 // Opcode 6 StatedPreference (plan §11.6, 12 bytes: arg = polarity, source 2 =
 // confirmed text, contextKey @8, actionId @9, reserved u16 @10 = 0) is parsed
-// only when `statedPreference` is set; until S18 wires it the production
-// adapter keeps treating opcode 6 as unknown (error 3). Source 3 (voice)
+// only when `statedPreference` is set (S26 enhanced production adapter).
+// Baseline v1 adapters keep opcode 6 unknown (error 3). Source 3 (voice)
 // stays invalid until D16. Context/action repertoire checks belong to the core.
 inline BleCommand parseCommand(const uint8_t* b,size_t n,
                                bool statedPreference=false,

@@ -1,10 +1,12 @@
 {
   "background_bytes": 108800,
   "frame_bytes": 13824,
-  "frames": 20,
-  "total_flash_pixels_bytes": 385280,
-  "opaque_height": 65,
-  "height_percent": 38.23529411764706,
+  "frames": 128,
+  "frames_per_state": 32,
+  "step_ms": 100,
+  "total_flash_pixels_bytes": 1878272,
+  "opaque_height": 55,
+  "height_percent": 32.35294117647059,
   "anchor": [
     112,
     72

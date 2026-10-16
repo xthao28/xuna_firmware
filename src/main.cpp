@@ -6,26 +6,27 @@
 #include "InputManager.h"
 #include "BleManager.h"
 #include <xuna/LocalBehavior.h>
+#include <xuna/identity/IdentityService.h>
+#include "NvsSnapshotStore.h"
+
+// Recovery and urgent commits stage several KB; ESP-IDF reports high water in bytes.
+SET_LOOP_TASK_STACK_SIZE(16384)
 namespace {
 xuna::DisplayManager display;
 xuna::InputManager input;
 xuna::AnimationManager animation;
-xuna::LifeEngine life;
 xuna::LocalBehavior localBehavior;
-// Life-feel values approved for a board trial (2026-10-15).
-xuna::ActivityFsm activity(xuna::lifeFeelThresholds());
-xuna::Needs needs(xuna::lifeFeelTuning());
-// Board trial (2026-10-15): learner v3 decides, v1 stays the durable record.
-xuna::BoardLearner learner(1);
-uint32_t bleActivityAt = 0;
-xuna::LifeStorage storage;
+xuna::NvsSnapshotStore storage;
+xuna::StoreSnapshotCommit snapshotCommit(storage);
+xuna::LifeCore core;
+xuna::V1LifeCoreAdapter adapter(core,snapshotCommit,false,true);
+xuna::IdentityService identity;
 xuna::BleManager ble;
-bool bleReady = false;
-uint32_t activeAt = 0, savedAt = 0;
+bool bleReady = false, lifeReady = false;
 bool displayReady = false;
 uint32_t diagnosticsAt = 0;
 uint32_t lastLoopUs = 0, maxLoopGapUs = 0;
-uint8_t lastActivity = 255;
+xuna::VisualIntent lastVisual = xuna::VisualIntent::Unknown;
 uint8_t loggedActivity = 255;
 const char* activityName(xuna::Activity a) {
   switch(a) {
@@ -43,13 +44,13 @@ const char* activityName(xuna::Activity a) {
 }
 // Life-feel board trial: one parseable line per call (energy/stim raw 0..65535).
 void logNeeds(const char* tag, uint32_t now) {
-  const auto& n=needs.state();
+  const auto& n=adapter.last().needs;
   Serial.printf("%s t_s=%u activity=%s energy=%u energy_pct=%u stim=%u stim_pct=%u\n", tag, now / 1000,
-                activityName(activity.state()), n.energy, uint32_t(n.energy) * 100 / 65535,
+                activityName(adapter.last().activity), n.energy, uint32_t(n.energy) * 100 / 65535,
                 n.stimulation, uint32_t(n.stimulation) * 100 / 65535);
 }
 void logActivityChange(uint32_t now) {
-  const uint8_t state=static_cast<uint8_t>(activity.state());
+  const uint8_t state=static_cast<uint8_t>(adapter.last().activity);
   if(loggedActivity==state) return;
   char head[48];
   snprintf(head, sizeof(head), "activity_change from=%s",
@@ -62,20 +63,21 @@ void logMemory() {
                 ESP.getFreeHeap(), ESP.getMinFreeHeap(), ESP.getPsramSize(), ESP.getFreePsram());
 }
 void syncActivityVisual(uint32_t now) {
-  const auto state=activity.state();
-  if(lastActivity==static_cast<uint8_t>(state)) return;
-  lastActivity=static_cast<uint8_t>(state);
-  switch(state) {
-    case xuna::Activity::Idle:
-    case xuna::Activity::Observing:
-    case xuna::Activity::Resting: animation.setIntent(xuna::VisualIntent::Idle,0,now); break;
-    case xuna::Activity::Sleeping: animation.setIntent(xuna::VisualIntent::Sleep,0,now); break;
-    case xuna::Activity::ErrorSafe: animation.setIntent(xuna::VisualIntent::ErrorSafe,0,now); break;
-    case xuna::Activity::Booting:
-    case xuna::Activity::Reacting:
-    case xuna::Activity::Playing:
-    case xuna::Activity::EvolutionTransition: break;
+  const auto intent=adapter.visual();
+  if(intent==lastVisual)return;
+  lastVisual=intent;
+  animation.setIntent(intent,0,now);
+}
+const char* recoveryName(xuna::LoadResult result) {
+  switch(result) {
+    case xuna::LoadResult::Ok: return "Ok";
+    case xuna::LoadResult::Migrated: return "Migrated";
+    case xuna::LoadResult::Missing: return "Missing";
+    case xuna::LoadResult::TooNew: return "TooNew";
+    case xuna::LoadResult::Corrupt: return "Corrupt";
+    case xuna::LoadResult::MigrationFailed: return "MigrationFailed";
   }
+  return "Unknown";
 }
 }
 void setup() {
@@ -91,18 +93,51 @@ void setup() {
   Serial.println(displayReady ? "Display driver initialized; confirm LCD visually." :
                                 "ERROR: display dimensions/buffer allocation failed; input/logging continue.");
   const uint32_t now = millis();
-  input.begin(now); animation.begin(now); needs.reset(now); diagnosticsAt = now;
-  const bool storageReady=storage.begin(life);
-  if (!storageReady) Serial.println("ERROR: life storage unavailable");
-  learner.reseed((uint64_t(esp_random()) << 32) | esp_random());
-  learner.restore(life);
-  Serial.printf("learner=v3-ucb (board trial) preferred quiet=%u play=%u\n",
-                learner.preferred(0), learner.preferred(1));
-  xuna::ActivityGuards boot; boot.restoreOk=storageReady; boot.energy=needs.state().energy;
-  activity.request(storageReady ? xuna::Activity::Idle : xuna::Activity::ErrorSafe,boot,now);
-  syncActivityVisual(now);
-  logActivityChange(now);
-  activeAt = savedAt = now;
+  input.begin(now); animation.begin(now); diagnosticsAt = now;
+  const bool storageReady=storage.begin();
+  const uint32_t boot=storageReady ? storage.nextBoot() : 0;
+  // Boot-only scratch is static so recovery does not add another snapshot to the stack.
+  static xuna::LifeSnapshotV2 recovered;
+  const auto report=xuna::SnapshotStore::recover(storage,recovered);
+  lifeReady=storageReady&&boot&&(report.result==xuna::LoadResult::Ok ||
+      report.result==xuna::LoadResult::Migrated || report.result==xuna::LoadResult::Missing);
+  recovered.counters.bootCounter=boot;
+  recovered.hasNeeds=false; // cold-boot needs; never persist a stale recovered need state
+  if(report.result==xuna::LoadResult::Ok||report.result==xuna::LoadResult::Migrated)
+    core.restore(recovered);
+  xuna::IdentityRecord record;
+  const auto identityLoad=storage.readIdentity(record);
+  const bool migratedPet=report.result==xuna::LoadResult::Migrated;
+  identity.onBoot(boot,identityLoad,&record,migratedPet);
+  if(lifeReady&&identity.state()==xuna::IdentityState::NeedsMigration){
+    xuna::IdentityEntropy entropy;
+    for(size_t i=0;i<sizeof(entropy.petId);i+=4){
+      const uint32_t word=esp_random();std::memcpy(entropy.petId+i,&word,4);
+    }
+    entropy.seed=esp_random();
+    lifeReady=identity.prepareMigration(entropy,recovered.counters.activeSeconds,now,record)&&
+        storage.writeIdentity(record)&&identity.acceptPersisted(record);
+  }
+  if(identity.state()==xuna::IdentityState::Safe ||
+      (report.result==xuna::LoadResult::Ok && identityLoad==xuna::IdentityLoad::Missing))lifeReady=false;
+  // Persist the migration before enabling input; v1 rollback keys remain read-only.
+  if(lifeReady&&report.result==xuna::LoadResult::Migrated){
+    lifeReady=snapshotCommit.commit(recovered);
+    if(lifeReady)core.restore(recovered);
+  }
+  Serial.printf("recover=%s slot=%d corrupt_slots=%u boot=%u ready=%u\n",
+                recoveryName(report.result),report.slot,report.corruptSlots,boot,lifeReady);
+  if(identity.state()==xuna::IdentityState::Ready){
+    Serial.print("PetId=");
+    for(uint8_t byte:identity.record().petId)Serial.printf("%02x",byte);
+    Serial.println();
+  }
+  core.snapshot().counters.bootCounter=boot;
+  core.begin(now,lifeReady);adapter.begin(now);
+  Serial.printf("learner=ProductLearner-v3 preferred quiet=%u play=%u\n",
+                unsigned(adapter.preferred(0)),unsigned(adapter.preferred(1)));
+  syncActivityVisual(now);logActivityChange(now);
+  Serial.printf("stack tag=setup high_water_bytes=%u\n",unsigned(uxTaskGetStackHighWaterMark(nullptr)));
   localBehavior.activity(now);
   bleReady = ble.begin();
   if (!bleReady) Serial.println("ERROR: BLE queue allocation failed");
@@ -115,37 +150,28 @@ void loop() {
   if (gap > maxLoopGapUs) maxLoopGapUs = gap;
   lastLoopUs = loopUs;
   const uint32_t now = millis();
-  // The activity held since the previous loop decides decay versus recovery.
-  needs.update(now, xuna::ActivityFsm::recoversEnergy(activity.state()));
-  xuna::ActivityGuards tickGuards; tickGuards.energy=needs.state().energy; tickGuards.restoreOk=true;
-  if (activity.tick(now,tickGuards)) syncActivityVisual(now);
-  if (bleReady) {
-    ble.update(animation, life, learner, storage, activity, needs, now, displayReady);
-    if (ble.activityAt() != bleActivityAt) {
-      bleActivityAt = ble.activityAt(); localBehavior.activity(now);
-    }
-  }
+  adapter.tick(now);
+  if (bleReady && ble.update(adapter,now,displayReady&&lifeReady))localBehavior.activity(now);
   const auto events = input.update(now);
-  if (events.happy) {
-    if (ble.requestLocalAction(animation,activity,needs,xuna::ActionId::Happy,now)) Serial.println("button GPIO0: happy");
+  if(lifeReady){
+    if(events.happy&&adapter.localGreeting(now))Serial.println("button GPIO0: happy");
+    if(events.idle&&adapter.localIdle(now))Serial.println("button GPIO14: idle");
+    if(events.happy||events.idle)localBehavior.activity(now);
+    uint8_t quietAction=0;
+    if(localBehavior.choosePreferred(now,adapter.last().activity==xuna::Activity::Idle,
+                                    static_cast<uint8_t>(adapter.preferred(0)),quietAction))
+      adapter.localAction(static_cast<xuna::ActionId>(quietAction),now);
   }
-  if (events.idle) { // Explicit idle wins simultaneous presses.
-    if (ble.requestLocalAction(animation,activity,needs,xuna::ActionId::Idle,now)) Serial.println("button GPIO14: idle");
-  }
-  if (events.happy || events.idle) localBehavior.activity(now);
-  uint8_t quietAction = 0;
-  if (localBehavior.choosePreferred(now, activity.state() == xuna::Activity::Idle, learner.preferred(0), quietAction))
-    ble.requestLocalAction(animation,activity,needs,static_cast<xuna::ActionId>(quietAction),now);
   syncActivityVisual(now);
   logActivityChange(now);
   animation.update(now);
   if(displayReady)display.update(now,animation.state());
   if (bleReady) ble.stateChanged(animation.state(), now);
-  const uint32_t activeSteps = uint32_t(now - activeAt) / 1000;
-  life.activeSeconds += activeSteps; activeAt += activeSteps * 1000;
-  if (uint32_t(now - savedAt) >= 300000) {
-    if (!storage.save(life)) Serial.println("ERROR: life snapshot save failed");
-    savedAt = now;
+  if(lifeReady&&adapter.checkpointDue(now)){
+    const bool saved=adapter.checkpoint(now);
+    Serial.printf("checkpoint=%s stack_high_water_bytes=%u\n",saved?"ok":"failed",
+                  unsigned(uxTaskGetStackHighWaterMark(nullptr)));
+    if(!saved)Serial.println("ERROR: life snapshot save failed");
   }
   if (uint32_t(now - diagnosticsAt) >= xuna::kDiagnosticsMs) {
     Serial.printf("scene=animated state=%s loop_gap_max_us=%u draws=%u draw_max_us=%u\n",

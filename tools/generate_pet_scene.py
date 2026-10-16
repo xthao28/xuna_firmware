@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
-"""Draw original simplified pixel geometry from xuna-pet reference, export RGB565/GIF.
-Uses existing Pillow. Reference is retained for design provenance, not resized into frames.
-Frame order: bob(2) x eyes(5: normal/half/closed/open/happy) x feet(2).
+"""Convert the approved XUNA sheet to 128 RGB565 frames and preserve the room.
+Frame order: Idle / Happy / Curious / Sleep, 32 timed loop frames per state.
 """
 from pathlib import Path
 import json
@@ -30,88 +29,85 @@ def background():
  # Grounded shadow is independent of sprite deformation.
  d.polygon([(118,133),(128,130),(190,130),(203,136),(190,142),(129,142),(115,138)],fill=P['floor_shadow'])
  return im
-# Trace only the character's large semantic regions, discard original texture/shading.
-# Re-author eyes, spots and moving feet on a fixed pixel canvas. Not a resized photo sprite.
-reference=Image.open(ROOT/'assets/source/xuna-pet.png').convert('RGB').crop((500,210,1240,815))
-orange=Image.new('L',reference.size);cream=Image.new('L',reference.size);dark=Image.new('L',reference.size)
-orange.putdata([255 if r>65 and r>g*1.30 and r>b*1.15 else 0 for r,g,b in reference.getdata()])
-cream.putdata([255 if r>175 and g>160 and b>110 and r>b*1.10 else 0 for r,g,b in reference.getdata()])
-orange=orange.filter(ImageFilter.MaxFilter(9)).filter(ImageFilter.MinFilter(9))
-cream=cream.filter(ImageFilter.MaxFilter(7)).filter(ImageFilter.MinFilter(7))
-near=Image.new('L',reference.size);near.putdata([max(a,b) for a,b in zip(orange.getdata(),cream.getdata())]);near=near.filter(ImageFilter.MaxFilter(35))
-dark.putdata([255 if n and r<65 and g<60 and b<70 else 0 for (r,g,b),n in zip(reference.getdata(),near.getdata())])
-combined=Image.new('L',reference.size);combined.putdata([max(a,b,c) for a,b,c in zip(orange.getdata(),cream.getdata(),dark.getdata())]);box=combined.getbbox()
-# The traced bounding box uses 80x64, keeping the reference's broad compact proportions.
-masks=[m.crop(box).resize((80,64),Image.Resampling.NEAREST) for m in (orange,cream,dark)]
-base=Image.new('RGBA',(SW,SH))
-for mask,color in [(masks[2],P['outline']),(masks[0],P['pet']),(masks[1],P['cream'])]:
- layer=Image.new('RGBA',(80,64),color);layer.putalpha(mask);base.alpha_composite(layer,(8,3))
-# Close small texture holes without retaining any photographic texture.
-alpha=base.getchannel('A');outside=alpha.point(lambda x:0 if x else 255)
-ImageDraw.floodfill(outside,(0,0),0)
-for y in range(SH):
- for x in range(SW):
-  if outside.getpixel((x,y)):base.putpixel((x,y),tuple(bytes.fromhex(P['pet'][1:]))+(255,))
-base.save(ROOT/'assets/generated/pet_authored_base.png')
-def pet(bob,eye,wiggle):
- im=Image.new('RGBA',(SW,SH))
- # Independent feet, sampled from an immutable base. Draw behind torso with overlap.
- for i,(x0,x1) in enumerate([(8,26),(26,43),(43,55),(55,71),(71,91)]):
-  foot=base.crop((x0,50,x1,SH));bounds=foot.getbbox()
-  if bounds:
-   for y in range(max(0,bounds[3]-4),bounds[3]):
-    for x in range(foot.width):
-     if foot.getpixel((x,y))[3]:foot.putpixel((x,y),tuple(bytes.fromhex(P['outline'][1:]))+(255,))
-  dx=(-2 if i%2 else 2) if wiggle else 0
-  im.alpha_composite(foot,(x0+dx,50))
- # Overlap at the joint: a one-pixel breath cannot expose a full transparent scanline.
- im.alpha_composite(base.crop((0,0,SW,55)),(0,-bob))
- d=ImageDraw.Draw(im)
- # Five stable body-relative dark-orange spots.
- for x,y in [(27,34),(20,42),(38,48),(73,40),(65,48)]:
-  d.rectangle((x-2,y-1-bob,x+2,y+1-bob),fill=P['pet_shadow']);d.rectangle((x-1,y-2-bob,x+1,y+2-bob),fill=P['pet_shadow'])
- if eye:
-  # Preserve default sly face from traced regions; re-author the eyelids for animation.
-  for rect in [(29,33-bob,49,45-bob),(59,30-bob,77,43-bob)]:d.rectangle(rect,fill=P['pet'])
-  if eye==2:
-   d.line((31,39-bob,46,39-bob),fill=P['outline'],width=2);d.line((61,37-bob,74,36-bob),fill=P['outline'],width=2)
-  elif eye==4:
-   d.line([(31,40-bob),(35,36-bob),(40,35-bob),(45,39-bob)],fill=P['outline'],width=2)
-   d.line([(60,39-bob),(64,35-bob),(70,35-bob),(74,38-bob)],fill=P['outline'],width=2)
-   d.rectangle((44,45-bob,59,53-bob),fill=P['outline']);d.rectangle((47,46-bob,56,48-bob),fill=P['cream'])
+# Use ONE upright reference for every frame; never interpolate mismatched AI poses.
+import math
+source=Image.open(ROOT/'assets/source/xuna-emotion-sheet-v2.png').convert('RGBA')
+cell=source.crop((0,0,source.width//4,source.height//4))
+cell.putalpha(cell.getchannel('A').point(lambda a:255 if a>=128 else 0))
+cut=cell.crop(cell.getbbox())
+cut=cut.resize((62,53),Image.Resampling.NEAREST)
+base=Image.new('RGBA',(SW,SH));base.alpha_composite(cut,(17,13))
+# Fixed feet and lower body. Only the upper body breathes, by at most two pixels.
+FRAMES_PER_STATE=32
+STEP_MS=100
+frames=[]
+ink='#161516';white='#fff7e9';skin='#ee7837'
+for emotion in range(4):
+ for step in range(FRAMES_PER_STATE):
+  phase=step/FRAMES_PER_STATE
+  breath=round(1-math.cos(2*math.pi*phase))
+  if emotion==1: breath=round(1-math.cos(4*math.pi*phase))
+  expression=round(1.5*(1-math.cos(2*math.pi*phase)))
+  face=base.copy();d=ImageDraw.Draw(face)
+  # Re-author the small face on the same immutable body, avoiding pose morphing.
+  for x in (34,54):
+   d.rectangle((x,42,x+15,50),fill=skin)
+   if emotion==3 or (emotion==0 and step==27):
+    d.line((x+1,47,x+12,47),fill=ink,width=2)
+   elif emotion==0 and step in (26,28):
+    d.rectangle((x+1,46,x+13,50),fill=white)
+    d.rectangle((x+9,46,x+12,49),fill=ink)
+   elif emotion==1:
+    d.line([(x+2,48),(x+2,45),(x+5,43),(x+8,43),(x+11,45),(x+11,48)],fill=ink,width=2)
+   else:
+    d.rectangle((x+1,43,x+13,50),fill=white)
+    gaze=0
+    if emotion==2:
+     gaze=round(2*math.sin(2*math.pi*phase))
+    d.rectangle((x+8+gaze,43,x+11+gaze,48),fill=ink)
+  d.rectangle((43,53,59,58),fill=skin)
+  if emotion==1:
+   d.line([(47-expression,54),(49-expression,56),(53+expression,56),(55+expression,54)],fill=ink,width=2)
+  elif emotion==2:
+   d.rectangle((50,54,53,57),fill=ink)
+  elif emotion==3:
+   d.rectangle((49-expression//2,54,53+expression//2,55),fill=ink)
   else:
-   depth=3 if eye==1 else 10
-   polygon(d,[(30,34-bob),(48,34-bob),(45,34+depth-bob),(35,36+depth-bob)],'cream')
-   polygon(d,[(61,33-bob),(74,31-bob),(75,32+depth-bob),(65,35+depth-bob)],'cream')
- return im
+   d.rectangle((47,54,55,55),fill=ink)
+  frame=Image.new('RGBA',(SW,SH))
+  frame.alpha_composite(face.crop((0,58,SW,SH)),(0,58))
+  frame.alpha_composite(face.crop((0,0,SW,60)),(0,-breath))
+  frames.append(frame)
+# The feet and their anchor must remain byte-identical across every emotion/frame.
+assert all(f.crop((0,59,SW,SH)).tobytes()==frames[0].crop((0,59,SW,SH)).tobytes() for f in frames)
 def rgb565(rgb):
  r,g,b=rgb[:3];return ((r>>3)<<11)|((g>>2)<<5)|(b>>3)
 def write_array(name,values):
  return 'alignas(4) const uint16_t '+name+'[] PROGMEM = {\n'+'\n'.join('  '+', '.join('0x%04x'%v for v in values[i:i+12])+',' for i in range(0,len(values),12))+'\n};\n'
-bg=background();frames=[pet(b,e,w) for b in range(2) for e in range(5) for w in range(2)]
+bg=background()
 output=ROOT/'assets/generated';output.mkdir(exist_ok=True)
-bg.save(output/'room_background.png');sheet=Image.new('RGBA',(SW*5,SH*4))
-for i,frame in enumerate(frames):sheet.paste(frame,((i%5)*SW,(i//5)*SH))
+bg.save(output/'room_background.png');sheet=Image.new('RGBA',(SW*32,SH*4))
+for i,frame in enumerate(frames):sheet.paste(frame,((i%32)*SW,(i//32)*SH))
 sheet.save(output/'pet_frames.png')
 preview=bg.convert('RGBA');preview.alpha_composite(frames[0],(AX,AY));preview.convert('RGB').save(output/'pet_lcd_preview.png')
-sequence=[0,0,10,10,0,2,4,6,0,1,0,1,0,8,8,8,0,0]
+sequence=list(range(len(frames)))
 views=[]
 for i in sequence:
  view=bg.convert('RGBA');view.alpha_composite(frames[i],(AX,AY));views.append(view.convert('RGB'))
-views[0].save(output/'pet_animation.gif',save_all=True,append_images=views[1:],duration=[700,700,700,700,700,700,90,110,120,700,150,150,150,700,700,700,700,700],loop=0,disposal=2)
+views[0].save(output/'pet_animation.gif',save_all=True,append_images=views[1:],duration=STEP_MS,loop=0,disposal=2)
 header='''// Generated by tools/generate_pet_scene.py.
 #pragma once
 #include <cstdint>
 namespace xuna { namespace scene {
 constexpr uint16_t kWidth=%d,kHeight=%d,kSpriteWidth=%d,kSpriteHeight=%d;
-constexpr uint16_t kAnchorX=%d,kAnchorY=%d,kFrameCount=20,kTransparent=0xf81f;
+constexpr uint16_t kAnchorX=%d,kAnchorY=%d,kFrameCount=128,kTransparent=0xf81f;
 extern const uint16_t kBackground[kWidth*kHeight];
 extern const uint16_t kFrames[kFrameCount*kSpriteWidth*kSpriteHeight];
 }}
 '''%(W,H,SW,SH,AX,AY)
 (ROOT/'include/assets/XunaAnimatedScene.h').write_text(header)
 values=[rgb565(p) if p[3] else 0xf81f for frame in frames for p in frame.getdata()]
-assert 0xf81f not in [rgb565(tuple(bytes.fromhex(v[1:]))) for v in P.values()]
+assert all(rgb565(p)!=0xf81f for f in frames for p in f.getdata() if p[3])
 (ROOT/'src/assets/XunaAnimatedScene.cpp').write_text('#include <pgmspace.h>\n#include "assets/XunaAnimatedScene.h"\nnamespace xuna { namespace scene {\n'+write_array('kBackground',[rgb565(p) for p in bg.getdata()])+write_array('kFrames',values)+'}}\n')
-(output/'animated_scene.json').write_text(json.dumps({'background_bytes':W*H*2,'frame_bytes':SW*SH*2,'frames':20,'total_flash_pixels_bytes':W*H*2+len(values)*2,'opaque_height':max(f.getbbox()[3] for f in frames)-min(f.getbbox()[1] for f in frames),'height_percent':(max(f.getbbox()[3] for f in frames)-min(f.getbbox()[1] for f in frames))/H*100,'anchor':[AX,AY]},indent=2)+'\n')
-print('Generated background + 20 authored frames; Flash pixels:',W*H*2+len(values)*2)
+(output/'animated_scene.json').write_text(json.dumps({'background_bytes':W*H*2,'frame_bytes':SW*SH*2,'frames':len(frames), 'frames_per_state':32, 'step_ms':STEP_MS,'total_flash_pixels_bytes':W*H*2+len(values)*2,'opaque_height':max(f.getbbox()[3] for f in frames)-min(f.getbbox()[1] for f in frames),'height_percent':(max(f.getbbox()[3] for f in frames)-min(f.getbbox()[1] for f in frames))/H*100,'anchor':[AX,AY]},indent=2)+'\n')
+print('Generated background + 128 anchored frames; Flash pixels:',W*H*2+len(values)*2)

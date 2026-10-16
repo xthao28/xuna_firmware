@@ -3,7 +3,7 @@
 #include <cstdint>
 namespace xuna { namespace scene {
 constexpr uint16_t kWidth=320,kHeight=170,kSpriteWidth=96,kSpriteHeight=72;
-constexpr uint16_t kAnchorX=112,kAnchorY=72,kFrameCount=20,kTransparent=0xf81f;
+constexpr uint16_t kAnchorX=112,kAnchorY=72,kFrameCount=128,kTransparent=0xf81f;
 extern const uint16_t kBackground[kWidth*kHeight];
 extern const uint16_t kFrames[kFrameCount*kSpriteWidth*kSpriteHeight];
 }}
