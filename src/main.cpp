@@ -8,6 +8,7 @@
 #include <xuna/LocalBehavior.h>
 #include <xuna/identity/IdentityService.h>
 #include "NvsSnapshotStore.h"
+#include "DeviceKey.h"
 
 // Recovery and urgent commits stage several KB; ESP-IDF reports high water in bytes.
 SET_LOOP_TASK_STACK_SIZE(16384)
@@ -22,6 +23,7 @@ xuna::LifeCore core;
 xuna::V1LifeCoreAdapter adapter(core,snapshotCommit,false,true);
 xuna::IdentityService identity;
 xuna::BleManager ble;
+xuna::DeviceKey deviceKey;
 bool bleReady = false, lifeReady = false;
 bool displayReady = false;
 uint32_t diagnosticsAt = 0;
@@ -141,6 +143,15 @@ void setup() {
   localBehavior.activity(now);
   bleReady = ble.begin();
   if (!bleReady) Serial.println("ERROR: BLE queue allocation failed");
+  if(storageReady){
+    const uint32_t keyStarted=micros();
+    const auto key=deviceKey.begin(storage);
+    static const char* const kKeyNames[]={"loaded","created","storage_failed","corrupt","crypto_failed"};
+    Serial.printf("device_key=%s us=%u pub=",kKeyNames[static_cast<uint8_t>(key)],unsigned(micros()-keyStarted));
+    if(deviceKey.ready())for(size_t i=0;i<9;++i)Serial.printf("%02x",deviceKey.publicKey()[i]);
+    Serial.println();
+    if(!deviceKey.ready())Serial.println("ERROR: device key unavailable; proofs report not_ready");
+  }
   logMemory();
   lastLoopUs = micros();
 }
@@ -153,7 +164,7 @@ void loop() {
   adapter.tick(now);
   const xuna::IdentityRecord* readyIdentity=
       identity.state()==xuna::IdentityState::Ready ? &identity.record() : nullptr;
-  if (bleReady && ble.update(adapter,readyIdentity,now,displayReady&&lifeReady))localBehavior.activity(now);
+  if (bleReady && ble.update(adapter,readyIdentity,deviceKey,now,displayReady&&lifeReady))localBehavior.activity(now);
   const auto events = input.update(now);
   if(lifeReady){
     if(events.happy&&adapter.localGreeting(now))Serial.println("button GPIO0: happy");

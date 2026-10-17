@@ -47,6 +47,16 @@ class NvsSnapshotStore : public ISnapshotStore {
     uint8_t b[IdentityRecord::kEncodedSize];
     return ready_&&record.encode(b)&&prefs_.putBytes("ident",b,sizeof(b))==sizeof(b);
   }
+  // Identity V2 device key `devkey`: 32-byte P-256 private scalar.
+  enum class KeyLoad : uint8_t { Missing,Present,Corrupt };
+  KeyLoad readDeviceKey(uint8_t out[32]) {
+    if(!ready_||!prefs_.isKey("devkey"))return KeyLoad::Missing;
+    if(prefs_.getBytesLength("devkey")!=32||prefs_.getBytes("devkey",out,32)!=32)return KeyLoad::Corrupt;
+    return KeyLoad::Present;
+  }
+  bool writeDeviceKey(const uint8_t key[32]) {
+    return ready_&&!prefs_.isKey("devkey")&&prefs_.putBytes("devkey",key,32)==32;
+  }
   // Boot counter `bootc` (plan §7.1): incremented and committed at every boot.
   uint32_t nextBoot() {
     if(!ready_)return 0;
