@@ -151,7 +151,9 @@ void loop() {
   lastLoopUs = loopUs;
   const uint32_t now = millis();
   adapter.tick(now);
-  if (bleReady && ble.update(adapter,now,displayReady&&lifeReady))localBehavior.activity(now);
+  const xuna::IdentityRecord* readyIdentity=
+      identity.state()==xuna::IdentityState::Ready ? &identity.record() : nullptr;
+  if (bleReady && ble.update(adapter,readyIdentity,now,displayReady&&lifeReady))localBehavior.activity(now);
   const auto events = input.update(now);
   if(lifeReady){
     if(events.happy&&adapter.localGreeting(now))Serial.println("button GPIO0: happy");

@@ -142,6 +142,9 @@ class V1LifeCoreAdapter {
     bytes[0]=1;bytes[1]=ExplanationCodec::kSize;
   }
 
+  // Last durable snapshot generation (Identity V1 projection ordering key).
+  uint32_t generation() const { return core_.snapshot().generation; }
+
   bool canFeedback() const {
     return decision_ != 0 && last_.hasDecision && last_.decisionId == decision_;
   }

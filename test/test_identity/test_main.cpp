@@ -3,6 +3,7 @@
 #include <xuna/LifeEngine.h>
 #include "../fixtures/v1_snapshots.h"
 #include <xuna/identity/IdentityService.h>
+#include <xuna/identity/IdentityCodec.h>
 using namespace xuna;
 IdentityEntropy entropy() { IdentityEntropy e;for(unsigned i=0;i<16;++i)e.petId[i]=i;e.seed=42;return e; }
 void crc_and_codec() {
@@ -86,5 +87,25 @@ void approximate_and_failure() {
  service.onBoot(0,IdentityLoad::Missing,nullptr,false);TEST_ASSERT_EQUAL(IdentityState::Safe,service.state());
  TEST_ASSERT_FALSE(service.prepareHatch(entropy(),IdentityOrigin::HatchedOnDevice,0,0,clock,record));
 }
+void identity_characteristic() {
+ IdentityRecord record;record.hatchBootCounter=3;record.origin=IdentityOrigin::MigratedFromV1;
+ for(unsigned i=0;i<16;++i)record.petId[i]=uint8_t(0xa0+i);record.petId[6]=0x46;record.petId[8]=0x88;
+ uint8_t bytes[IdentityCodec::kSize];std::memset(bytes,0xee,sizeof(bytes));
+ TEST_ASSERT_EQUAL_UINT32(24,sizeof(bytes));
+ TEST_ASSERT_TRUE(IdentityCodec::encode(&record,0x01020304,bytes));
+ const uint8_t expected[24]={1,24,0xa0,0xa1,0xa2,0xa3,0xa4,0xa5,0x46,0xa7,0x88,0xa9,0xaa,0xab,0xac,0xad,0xae,0xaf,
+  3,0,0x04,0x03,0x02,0x01};
+ TEST_ASSERT_EQUAL_MEMORY(expected,bytes,24);
+ record.origin=IdentityOrigin::HatchedViaApp;TEST_ASSERT_TRUE(IdentityCodec::encode(&record,0xffffffffU,bytes));
+ TEST_ASSERT_EQUAL_UINT8(2,bytes[18]);TEST_ASSERT_EQUAL_HEX32(0xffffffffU,IdentityRecord::get32(bytes+20));
+ const uint8_t empty[24]={1,24};
+ std::memset(bytes,0xee,sizeof(bytes));TEST_ASSERT_FALSE(IdentityCodec::encode(nullptr,7,bytes));
+ TEST_ASSERT_EQUAL_MEMORY(empty,bytes,24);
+ record.hatchBootCounter=0;std::memset(bytes,0xee,sizeof(bytes));
+ TEST_ASSERT_FALSE(IdentityCodec::encode(&record,7,bytes));TEST_ASSERT_EQUAL_MEMORY(empty,bytes,24);
+ IdentityService service;service.onBoot(1,IdentityLoad::Missing,nullptr,false);
+ TEST_ASSERT_EQUAL(IdentityState::Egg,service.state());
+ TEST_ASSERT_FALSE(IdentityCodec::encode(service.state()==IdentityState::Ready?&service.record():nullptr,9,bytes));
+}
 void setUp() {} void tearDown() {}
-int main(){UNITY_BEGIN();RUN_TEST(crc_and_codec);RUN_TEST(hatch_and_migration);RUN_TEST(birth_time);RUN_TEST(approximate_and_failure);return UNITY_END();}
+int main(){UNITY_BEGIN();RUN_TEST(crc_and_codec);RUN_TEST(hatch_and_migration);RUN_TEST(birth_time);RUN_TEST(approximate_and_failure);RUN_TEST(identity_characteristic);return UNITY_END();}

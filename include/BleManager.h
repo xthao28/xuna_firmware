@@ -6,6 +6,7 @@
 #include <cstring>
 #include <xuna/AnimationManager.h>
 #include <xuna/BleProtocol.h>
+#include <xuna/identity/IdentityCodec.h>
 #include <xuna/protocol/V1LifeCoreAdapter.h>
 namespace xuna {
 class BleManager {
@@ -14,13 +15,14 @@ class BleManager {
   QueueHandle_t queue_=nullptr;
   BLECharacteristic *status_=nullptr,*lifeStatus_=nullptr;
   BLECharacteristic* explanation_=nullptr;
+  BLECharacteristic* identity_=nullptr;
   BLECharacteristic* memories_[2]={nullptr,nullptr};
   std::atomic<bool> connected_{false};
   std::atomic<uint32_t> session_{0};
   uint32_t seenSession_=0,sequence_=0;
   uint8_t lastState_=255;
   bool advertising_=true;
-  uint8_t lastLife_[20]={},lastMemories_[2][20]={},lastExplanation_[20]={};
+  uint8_t lastLife_[20]={},lastMemories_[2][20]={},lastExplanation_[20]={},lastIdentity_[IdentityCodec::kSize]={};
   std::atomic<uint16_t> central_{0xffff};
   class ServerCallbacks: public BLEServerCallbacks {
     BleManager& owner_;
@@ -57,20 +59,23 @@ class BleManager {
   bool begin() {
     queue_=xQueueCreate(8,sizeof(Packet));if(!queue_)return false;
     BLEDevice::init("XUNA");auto* server=BLEDevice::createServer();server->setCallbacks(&serverCallbacks_);
-    auto* service=server->createService(kService);
+    // Default createService budget is 15 handles; this service needs 18 (service,
+    // 8 characteristics × 2, status CCCD). Too few silently drops 000b/000c.
+    auto* service=server->createService(BLEUUID(kService),32);
     auto* caps=service->createCharacteristic("7a6e0002-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ);
-    uint8_t b[8]={1,8,0x3f,0,15,3,0x60,0x09};caps->setValue(b,sizeof(b));
+    uint8_t b[8]={1,8,0xbf,0,15,3,0x60,0x09};caps->setValue(b,sizeof(b));
     auto* command=service->createCharacteristic("7a6e0003-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_WRITE);command->setCallbacks(&writeCallbacks_);
     status_=service->createCharacteristic("7a6e0004-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ|BLECharacteristic::PROPERTY_NOTIFY);status_->addDescriptor(new BLE2902());
     lifeStatus_=service->createCharacteristic("7a6e0005-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ);
     memories_[0]=service->createCharacteristic("7a6e0006-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ);
     memories_[1]=service->createCharacteristic("7a6e0007-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ);
     explanation_=service->createCharacteristic("7a6e000b-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ);
+    identity_=service->createCharacteristic("7a6e000c-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ);
     publish(0,0,0,PetState::Idle,0);service->start();
     auto* adv=BLEDevice::getAdvertising();adv->addServiceUUID(kService);adv->setScanResponse(true);adv->start();return true;
   }
   // All life/learning decisions belong to the pure adapter; callbacks only queue bytes.
-  bool update(V1LifeCoreAdapter& adapter,uint32_t now,bool ready) {
+  bool update(V1LifeCoreAdapter& adapter,const IdentityRecord* identity,uint32_t now,bool ready) {
     const auto session=session_.load();
     if(session!=seenSession_){adapter.onSession();seenSession_=session;}
     if(connected_)advertising_=false;
@@ -103,6 +108,8 @@ class BleManager {
     }
     adapter.encodeExplanation(b);
     if(std::memcmp(lastExplanation_,b,sizeof(b))){std::memcpy(lastExplanation_,b,sizeof(b));explanation_->setValue(b,sizeof(b));}
+    uint8_t id[IdentityCodec::kSize];IdentityCodec::encode(identity,adapter.generation(),id);
+    if(std::memcmp(lastIdentity_,id,sizeof(id))){std::memcpy(lastIdentity_,id,sizeof(id));identity_->setValue(id,sizeof(id));}
     // Publish only after all read projections reflect the committed command.
     if(reply)publish(1,replyId,replyResult,replyState,now);
     return interacted;
