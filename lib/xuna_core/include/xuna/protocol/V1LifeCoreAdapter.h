@@ -41,8 +41,8 @@ class V1LifeCoreAdapter {
     kNotReady = 7,
     kExpired = 8,
   };
-  // v1 transport copies at most 12 bytes; only packets that fit are deduped.
-  static constexpr size_t kMaxPacket = 12;
+  // TimeSync is the only v1 additive command wider than 12 bytes.
+  static constexpr size_t kMaxPacket = 16;
   // v1 checkpoint cadence for active lifetime (main.cpp, 5 minutes).
   static constexpr uint32_t kCheckpointMs = 300000;
 
@@ -71,7 +71,7 @@ class V1LifeCoreAdapter {
   // echoed in the status value.
   uint8_t handle(const uint8_t* bytes, size_t size, uint32_t now, bool ready,
                  uint32_t& id) {
-    const BleCommand c = parseCommand(bytes, size, enhancedLearning_);
+    const BleCommand c = parseCommand(bytes, size, enhancedLearning_, true);
     id = c.id;
     uint8_t result = c.error;
     const int duplicate = size <= kMaxPacket ? cache_.find(bytes, size) : -1;
@@ -202,6 +202,8 @@ class V1LifeCoreAdapter {
 
   const LifeCoreStepOutput& last() const { return last_; }
   VisualIntent visual() const { return last_.visual; }
+  const ClockModel& clock() const { return core_.clock(); }
+  uint64_t monoNow() const { return core_.mono64(); }
 
  private:
   uint8_t dispatch(const BleCommand& c, uint32_t now) {
@@ -237,6 +239,12 @@ class V1LifeCoreAdapter {
         decision_ = 0;
         if(!core_.forget())return kNotReady;
         explanation_=V3Decision();return kOk;
+      case 5: {
+        const int64_t utcMs = static_cast<int64_t>(c.utcSeconds) * 1000LL;
+        const SyncResult result = core_.sync(
+            utcMs, c.tzOffsetMin, TimeSource::Phone, now);
+        return result.status == SyncStatus::Accepted ? kOk : kInvalidArgument;
+      }
       case 6: {
         const LifeCoreEvent event(LifeCoreEventKind::StatedPreference,c.id,
                                   c.contextKey,c.action,c.arg==1,c.source);

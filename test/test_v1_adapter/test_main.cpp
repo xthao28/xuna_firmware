@@ -395,8 +395,24 @@ void enhanced_explanation_is_commit_grounded_and_cleared_by_direct_input() {
   rig.adapter.encodeExplanation(after);TEST_ASSERT_EQUAL_UINT8(0,after[5]);
 }
 
+void time_sync_accepts_frozen_frame_and_rejects_rollback() {
+  Rig rig(false, true);rig.boot(1000);uint32_t id=0;
+  TEST_ASSERT_EQUAL_UINT8(
+      0,rig.send("01 05 78 56 34 12 01 00 00 f1 53 65 a4 01 00 00",2000,id));
+  TEST_ASSERT_EQUAL_UINT32(0x12345678,id);
+  TEST_ASSERT_EQUAL_UINT8(uint8_t(ClockQuality::Synced),
+                          uint8_t(rig.adapter.clock().quality(rig.adapter.monoNow())));
+  TEST_ASSERT_EQUAL_UINT8(uint8_t(DayPart::Morning),
+                          uint8_t(rig.adapter.clock().dayPart(rig.adapter.monoNow())));
+  TEST_ASSERT_EQUAL_INT16(420,rig.adapter.clock().tzOffsetMin());
+  // Six minutes behind the accepted watermark exceeds the frozen tolerance.
+  TEST_ASSERT_EQUAL_UINT8(
+      4,rig.send("01 05 79 56 34 12 01 00 98 ef 53 65 a4 01 00 00",3000,id));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
+  RUN_TEST(time_sync_accepts_frozen_frame_and_rejects_rollback);
   RUN_TEST(enhanced_explanation_is_commit_grounded_and_cleared_by_direct_input);
   RUN_TEST(enhanced_statements_are_committed_explained_and_deduplicated);
   RUN_TEST(enhanced_expiry_after_tick_has_a_dedicated_result);

@@ -10,7 +10,7 @@
 namespace xuna {
 class BleManager {
   static constexpr const char* kService="7a6e0001-8c44-4db6-9f61-2b7d5300a101";
-  struct Packet { uint8_t bytes[12];size_t size;uint32_t session; };
+  struct Packet { uint8_t bytes[16];size_t size;uint32_t session; };
   QueueHandle_t queue_=nullptr;
   BLECharacteristic *status_=nullptr,*lifeStatus_=nullptr;
   BLECharacteristic* explanation_=nullptr;
@@ -59,7 +59,7 @@ class BleManager {
     BLEDevice::init("XUNA");auto* server=BLEDevice::createServer();server->setCallbacks(&serverCallbacks_);
     auto* service=server->createService(kService);
     auto* caps=service->createCharacteristic("7a6e0002-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ);
-    uint8_t b[8]={1,8,0x2f,0,15,3,0x60,0x09};caps->setValue(b,sizeof(b));
+    uint8_t b[8]={1,8,0x3f,0,15,3,0x60,0x09};caps->setValue(b,sizeof(b));
     auto* command=service->createCharacteristic("7a6e0003-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_WRITE);command->setCallbacks(&writeCallbacks_);
     status_=service->createCharacteristic("7a6e0004-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ|BLECharacteristic::PROPERTY_NOTIFY);status_->addDescriptor(new BLE2902());
     lifeStatus_=service->createCharacteristic("7a6e0005-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ);
@@ -87,6 +87,13 @@ class BleManager {
       if(p.size>=2&&p.bytes[1]==3)
         Serial.printf("stack tag=feedback high_water_bytes=%u result=%u\n",
                       unsigned(uxTaskGetStackHighWaterMark(nullptr)),result);
+      if(p.size>=2&&p.bytes[1]==5){
+        const auto quality=adapter.clock().quality(adapter.monoNow());
+        const auto part=adapter.clock().dayPart(adapter.monoNow());
+        Serial.printf("time_sync result=%u quality=%u day_part=%u tz_min=%d\n",
+                      result,unsigned(quality),unsigned(part),
+                      int(adapter.clock().tzOffsetMin()));
+      }
     }
     uint8_t b[20];adapter.encodeLife(b);
     if(std::memcmp(lastLife_,b,sizeof(b))){std::memcpy(lastLife_,b,sizeof(b));lifeStatus_->setValue(b,sizeof(b));}
