@@ -32,7 +32,10 @@ bool timed(const char* name, F run) {
 }  // namespace
 
 int main() {
-  bool ok = timed("D", [] { return xuna::LifeScenarios::noFeedback(100); });
+  bool ok = timed("D", [] {
+    return xuna::LifeScenarios::noFeedback(xuna_fixture::scripted,
+                                           xuna::LifeEngine::kSnapshotSize, 100);
+  });
   ok = timed("E", [] {
          return xuna::LifeScenarios::rebootsAndPowerCuts(
              xuna_fixture::scripted, xuna::LifeEngine::kSnapshotSize);

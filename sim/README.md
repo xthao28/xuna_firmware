@@ -73,7 +73,7 @@ c++ -std=c++11 -O2 -Wall -Wextra -Werror -Ilib/xuna_core/include sim/scenarios.c
 
 | Scenario | What it checks |
 | --- | --- |
-| D | 100 days, 800 suggestions, greetings, daily syncs, no rating: learner bit-identical to a fresh one, no episodes |
+| D | Migrated pet, 100 days, 800 suggestions, greetings, daily syncs, no rating: learner bit-identical to its boot state, in RAM and after a reboot |
 | E | Migrated v1 pet, 10 reboots + 5 torn-write power cuts while rating: durable feedback = acks, resent rating never applied twice, PetId unchanged, age loss ≤ one checkpoint (300 s) |
 | Stability | 100 days of a seeded owner (ratings, late ratings, greetings, idle, syncs, a reboot every 10 days, one forget): invariants after every 1 s step |
 

@@ -66,8 +66,8 @@ class BoardLab {
   // setup(): `now` is millis() at boot (the caller restarts it at 0).
   bool boot(uint32_t now) {
     ram_.reset(new Ram(commit_));
-    last_ = BootSequence::run(store_, true, commit_, ram_->core, ram_->identity,
-                              entropy_, scratch_, now);
+    last_ = BootSequence::run(store_, true, ram_->gated, ram_->core,
+                              ram_->identity, entropy_, scratch_, now);
     ram_->adapter.begin(now);
     ram_->local.activity(now);
     return last_.lifeReady;
@@ -82,7 +82,7 @@ class BoardLab {
               now, ram_->adapter.last().activity == Activity::Idle,
               static_cast<uint8_t>(ram_->adapter.preferred(0)), quietAction))
         ram_->adapter.localAction(static_cast<ActionId>(quietAction), now);
-      if (ram_->adapter.checkpointDue(now)) {
+      if (last_.persistReady() && ram_->adapter.checkpointDue(now)) {
         ++checkpoints_;
         if (!ram_->adapter.checkpoint(now)) ++checkpointFailures_;
       }
@@ -162,10 +162,11 @@ class BoardLab {
   // Everything main.cpp keeps in RAM (globals), rebuilt on every boot.
   struct Ram {
     explicit Ram(ISnapshotCommit& commit)
-        : adapter(core, commit, false, true) {}
+        : gated(commit, identity), adapter(core, gated, false, true) {}
+    IdentityService identity;
+    IdentityGatedCommit gated;
     LifeCore core;
     V1LifeCoreAdapter adapter;
-    IdentityService identity;
     LocalBehavior local;
   };
 

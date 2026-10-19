@@ -19,13 +19,15 @@ xuna::InputManager input;
 xuna::AnimationManager animation;
 xuna::LocalBehavior localBehavior;
 xuna::NvsSnapshotStore storage;
-xuna::StoreSnapshotCommit snapshotCommit(storage);
+xuna::StoreSnapshotCommit storeCommit(storage);
+xuna::IdentityService identity;
+// No snapshot is written before the pet has an identity (Egg devices).
+xuna::IdentityGatedCommit snapshotCommit(storeCommit,identity);
 xuna::LifeCore core;
 xuna::V1LifeCoreAdapter adapter(core,snapshotCommit,false,true);
-xuna::IdentityService identity;
 xuna::BleManager ble;
 xuna::DeviceKey deviceKey;
-bool bleReady = false, lifeReady = false;
+bool bleReady = false, lifeReady = false, persistReady = false;
 bool displayReady = false;
 uint32_t diagnosticsAt = 0;
 uint32_t lastLoopUs = 0, maxLoopGapUs = 0;
@@ -105,6 +107,7 @@ void setup() {
                                           entropy,recovered,now);
   const auto& report=boot.recovery;
   lifeReady=boot.lifeReady;
+  persistReady=boot.persistReady();
   Serial.printf("recover=%s slot=%d corrupt_slots=%u boot=%u ready=%u\n",
                 recoveryName(report.result),report.slot,report.corruptSlots,boot.boot,lifeReady);
   if(identity.state()==xuna::IdentityState::Ready){
@@ -157,7 +160,7 @@ void loop() {
   animation.update(now);
   if(displayReady)display.update(now,animation.state());
   if (bleReady) ble.stateChanged(animation.state(), now);
-  if(lifeReady&&adapter.checkpointDue(now)){
+  if(persistReady&&adapter.checkpointDue(now)){
     const bool saved=adapter.checkpoint(now);
     Serial.printf("checkpoint=%s stack_high_water_bytes=%u\n",saved?"ok":"failed",
                   unsigned(uxTaskGetStackHighWaterMark(nullptr)));

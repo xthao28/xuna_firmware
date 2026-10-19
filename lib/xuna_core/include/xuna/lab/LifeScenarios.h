@@ -37,13 +37,19 @@ class LifeScenarios {
   static constexpr int16_t kTz = 420;               // Asia/Ho_Chi_Minh
 
   // D: 100 days of life with suggestions, greetings and syncs but no rating.
-  // The learner must end bit-identical to a fresh one.
-  static ScenarioReport noFeedback(uint32_t days = 100, uint32_t stepMs = 1000) {
+  // The learner must end bit-identical to its state at boot (the migrated
+  // pet's learner; an unhatched device cannot persist at all).
+  static ScenarioReport noFeedback(const uint8_t* v1, size_t v1Size,
+                                   uint32_t days = 100, uint32_t stepMs = 1000) {
     ScenarioReport r;
     r.days = days;
     BoardLab lab;
+    lab.store().seedV1(v1, v1Size);
     if (!lab.boot(0)) return fail(r, "boot not ready");
     ++r.boots;
+    const PreferenceLearnerV3 start = lab.core().learner();
+    const uint32_t startFeedback = lab.snapshot().counters.feedbackCount;
+    const uint8_t startEpisodes = lab.snapshot().episodes.count;
     uint8_t frame[16];
     uint32_t id = 0;
     for (uint64_t t = stepMs; t <= days * kDayMs; t += stepMs) {
@@ -61,13 +67,17 @@ class LifeScenarios {
         ++r.syncsAccepted;
       lab.loop(now);
       ++r.steps;
-      if (lab.snapshot().counters.feedbackCount != 0) return fail(r, "feedback appeared");
+      if (lab.snapshot().counters.feedbackCount != startFeedback)
+        return fail(r, "feedback appeared");
     }
     if (lab.checkpointFailures()) return fail(r, "checkpoint failed");
-    LifeCore fresh;
-    if (!sameLearner(lab.core().learner(), fresh.learner()))
-      return fail(r, "learner differs from a fresh one");
-    if (lab.snapshot().episodes.count != 0) return fail(r, "episodes recorded");
+    if (!sameLearner(lab.core().learner(), start))
+      return fail(r, "learner changed without feedback");
+    if (lab.snapshot().episodes.count != startEpisodes) return fail(r, "episodes recorded");
+    // ... and the durable copy after a reboot is the same learner.
+    if (!lab.boot(0)) return fail(r, "reboot not ready");
+    ++r.boots;
+    if (!sameLearner(lab.core().learner(), start)) return fail(r, "stored learner changed");
     return finish(r, lab);
   }
 
@@ -153,8 +163,7 @@ class LifeScenarios {
   // Stability: 100 days of a simulated owner (ratings, late ratings,
   // greetings, idle presses, daily syncs, a reboot every 10 days, one forget)
   // with invariants checked after every step. Starts from a migrated v1 pet,
-  // like the board: an unhatched (Egg) device cannot reboot after saving
-  // (see BootSequence step 4 and the S19b record).
+  // like the board (an unhatched device does not learn before hatching).
   static ScenarioReport stability(const uint8_t* v1, size_t v1Size,
                                   uint32_t days = 100, uint64_t seed = 2026,
                                   uint32_t stepMs = 1000) {

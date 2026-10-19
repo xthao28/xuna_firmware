@@ -21,14 +21,16 @@ void report(const char* name, const ScenarioReport& r) {
 
 }  // namespace
 
-// S19b D: no feedback for 100 days leaves the learner bit-identical to fresh.
+// S19b D: no feedback for 100 days leaves the learner bit-identical.
 void scenario_d_no_feedback_for_100_days() {
-  const ScenarioReport r = LifeScenarios::noFeedback(100);
+  const ScenarioReport r = LifeScenarios::noFeedback(
+      xuna_fixture::scripted, LifeEngine::kSnapshotSize, 100);
   report("D", r);
-  TEST_ASSERT_EQUAL_UINT32(0, r.feedbackCount);
+  TEST_ASSERT_EQUAL_UINT32(2, r.boots);
   TEST_ASSERT_EQUAL_UINT32(800, r.suggestions);
   TEST_ASSERT_TRUE(r.checkpoints > 28000);
   TEST_ASSERT_TRUE(r.activeSeconds >= 100U * 86400U - 300U);
+  TEST_ASSERT_EQUAL_UINT32(0, r.feedbackAcked);
 }
 
 // S19b E: 10 reboots + 5 power cuts while rating.
@@ -85,20 +87,26 @@ void boot_migrates_v1_and_keeps_the_pet_id() {
   TEST_ASSERT_EQUAL_UINT32(2, lab.snapshot().counters.bootCounter);
 }
 
-// Known gap (S19b finding, owner decision pending): an unhatched device
-// (no v1, no identity) saves v2 snapshots, and the next boot treats
-// "snapshot Ok + identity Missing" as damage and stays read-only.
-void boot_unhatched_device_is_read_only_after_saving() {
+// S19b finding, fixed 2026-10-19: an unhatched (Egg) device used to save v2
+// snapshots and then boot read-only ("snapshot Ok + identity Missing").
+// IdentityGatedCommit writes nothing before an identity exists, so the
+// device keeps booting normally; it learns only after hatching.
+void boot_unhatched_device_never_saves_and_keeps_booting() {
   BoardLab lab;
   TEST_ASSERT_TRUE(lab.boot(0));
   TEST_ASSERT_EQUAL_UINT8(uint8_t(IdentityState::Egg),
                           uint8_t(lab.identity().state()));
+  TEST_ASSERT_FALSE(lab.lastBoot().persistReady());
   uint8_t frame[16];
   TEST_ASSERT_EQUAL_UINT8(0, lab.command(frame, BoardLab::suggest(frame, 1, 0), 1000));
-  TEST_ASSERT_EQUAL_UINT8(0,
-                          lab.command(frame, BoardLab::feedback(frame, 2, 1, true), 2000));
-  TEST_ASSERT_FALSE(lab.boot(0));
-  TEST_ASSERT_EQUAL_UINT8(uint8_t(LoadResult::Ok),
+  TEST_ASSERT_EQUAL_UINT8(
+      V1LifeCoreAdapter::kNotReady,
+      lab.command(frame, BoardLab::feedback(frame, 2, 1, true), 2000));
+  TEST_ASSERT_EQUAL_UINT32(0, lab.snapshot().counters.feedbackCount);
+  for (uint32_t t = 3000; t <= 20 * 60000; t += 1000) lab.loop(t);
+  TEST_ASSERT_EQUAL_UINT32(0, lab.checkpoints());
+  TEST_ASSERT_TRUE(lab.boot(0));
+  TEST_ASSERT_EQUAL_UINT8(uint8_t(LoadResult::Missing),
                           uint8_t(lab.lastBoot().recovery.result));
 }
 
@@ -112,6 +120,6 @@ int main() {
   RUN_TEST(scenario_stability_100_days);
   RUN_TEST(scenarios_are_repeatable);
   RUN_TEST(boot_migrates_v1_and_keeps_the_pet_id);
-  RUN_TEST(boot_unhatched_device_is_read_only_after_saving);
+  RUN_TEST(boot_unhatched_device_never_saves_and_keeps_booting);
   return UNITY_END();
 }

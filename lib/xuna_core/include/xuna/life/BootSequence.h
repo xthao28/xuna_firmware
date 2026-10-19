@@ -21,10 +21,31 @@ class IBootStore : public ISnapshotStore {
   virtual uint32_t nextBoot() = 0;
 };
 
+// Commit port that refuses every snapshot write until the pet has an
+// identity. Keeps the S13/S18 invariant "a durable v2 snapshot implies a
+// committed identity", so "snapshot Ok + identity Missing" at boot still means
+// damage. An unhatched (Egg) device therefore lives but does not learn: its
+// ratings answer not_ready until it hatches (S10-hatch).
+class IdentityGatedCommit : public ISnapshotCommit {
+ public:
+  IdentityGatedCommit(ISnapshotCommit& inner, const IdentityService& identity)
+      : inner_(inner), identity_(identity) {}
+  bool commit(LifeSnapshotV2& staged) override {
+    return identity_.state() == IdentityState::Ready && inner_.commit(staged);
+  }
+
+ private:
+  ISnapshotCommit& inner_;
+  const IdentityService& identity_;
+};
+
 struct BootResult {
   RecoveryReport recovery;
   uint32_t boot = 0;
   bool lifeReady = false;
+  // Lazy checkpoints only with an identity (see IdentityGatedCommit).
+  bool persistReady() const { return lifeReady && identityReady; }
+  bool identityReady = false;
 };
 
 // S13 + S18 boot policy, shared by main.cpp setup() and Life Lab so host
@@ -36,7 +57,8 @@ struct BootResult {
 //   4. identity: a migrated v1 pet gets a new PetId, committed before input;
 //      a v2 snapshot without its identity record stays read-only;
 //   5. a migrated snapshot is committed as v2 before input is enabled;
-//   6. LifeCore::begin. The caller then starts its adapter.
+//   6. LifeCore::begin. The caller then starts its adapter. Pass an
+//      IdentityGatedCommit as `commit` (and to the adapter).
 // `scratch` holds the recovered snapshot (several KB; the board keeps it
 // static to spare the loop stack). `entropy` is used only for a migration.
 class BootSequence {
@@ -81,6 +103,7 @@ class BootSequence {
       r.lifeReady = commit.commit(scratch);
       if (r.lifeReady) core.restore(scratch);
     }
+    r.identityReady = identity.state() == IdentityState::Ready;
     core.snapshot().counters.bootCounter = r.boot;
     core.begin(now, r.lifeReady);
     return r;
