@@ -4,6 +4,7 @@
 
 #include <xuna/base/Random.h>
 #include <xuna/learning/LearnerVocabulary.h>
+#include <xuna/learning/HabitPredictor.h>
 #include <xuna/learning/ProductLearner.h>
 #include <xuna/life/ActionGate.h>
 #include <xuna/life/ActivityFsm.h>
@@ -75,6 +76,8 @@ struct LifeCoreStepOutput {
   bool actionAccepted = false;
   bool learningFeedbackApplied = false;
   bool reactionApplied = false;     // a Reaction taught the learner
+  bool sessionObserved = false;     // routine learning saw a new session
+  bool anticipated = false;         // XUNA showed it expects the owner
   bool persistRequested = false;
   bool feedbackCommitted = false;  // urgent commit done before applying
   bool feedbackNotReady = false;   // commit failed; RAM unchanged (§9.5)
@@ -174,10 +177,14 @@ class LifeCore {
 
     const uint8_t count = input.eventCount > kMaxEvents ? kMaxEvents
                                                          : input.eventCount;
+    bool owner = false;
     for (uint8_t i = 0; i < count; ++i) {
       if (!input.events) break;
       process(input.events[i], input.now, signals, output);
+      // Everything except XUNA's own idle choice comes from the owner.
+      if (input.events[i].kind != LifeCoreEventKind::Spontaneous) owner = true;
     }
+    routine(owner, input.now, output);
     // D3: an unrated decision ends 120 s after it was shown.
     if (learner_.expire(input.now)) output.decisionExpired = true;
     mood_.update(needs_.state(), signals);
@@ -330,6 +337,41 @@ class LifeCore {
     output.selectedExplore = decision.explore;
   }
 
+  // Routine learning (plan §9.7), only with trusted local time; the
+  // prediction is checked once per local minute.
+  void routine(bool owner, MonoMs now, LifeCoreStepOutput& output) {
+    if (activity_.state() == Activity::ErrorSafe) return;
+    const bool recent =
+        lastOwnerMono_ != 0 && mono64_ - lastOwnerMono_ < HabitPredictor::kSessionGapMs;
+    const bool trusted = clock_.quality(mono64_) != ClockQuality::Unknown;
+    const uint32_t utcMinute = trusted ? clock_.utcMinute(mono64_) : 0;
+    const int64_t local = int64_t(utcMinute) + clock_.tzOffsetMin();
+    const bool timeOk = utcMinute != 0 && local > 0;
+    const uint32_t day = timeOk ? uint32_t(local / 1440) : 0;
+    const uint32_t minute = timeOk ? uint32_t(local % 1440) : 0;
+    HabitState& habit = learner_.state().habit;
+    if (owner) {
+      if (!recent && timeOk) {
+        HabitPredictor::observe(habit, day, minute);
+        output.sessionObserved = true;
+      }
+      lastOwnerMono_ = mono64_ ? mono64_ : 1;
+      return;
+    }
+    if (!timeOk || recent || uint32_t(local) == lastRoutineMinute_) return;
+    lastRoutineMinute_ = uint32_t(local);
+    uint32_t key = 0;
+    if (activity_.state() != Activity::Idle ||
+        !HabitPredictor::expects(habit, day, minute, key))
+      return;
+    if (key == anticipatedKey_) return;  // once per expected run and day
+    // A direct action through ActionGate: a sleeping or tired XUNA is not
+    // woken; it only shows it expects the owner when it may act.
+    if (!requestAction(static_cast<uint8_t>(ActionId::Curious), 0, now)) return;
+    anticipatedKey_ = key;
+    output.anticipated = true;
+  }
+
   uint8_t allowedMask(MonoMs now) const {
     uint8_t mask = 0;
     for (uint8_t index = 0; index < kLearnActionCount; ++index) {
@@ -430,6 +472,9 @@ class LifeCore {
   ClockModel clock_;
   MonoMs lastNow_ = 0;
   uint64_t mono64_ = 0;
+  uint64_t lastOwnerMono_ = 0;      // RAM only: sessions restart after a boot
+  uint32_t lastRoutineMinute_ = 0;
+  uint32_t anticipatedKey_ = 0;
   ISnapshotCommit* commit_ = 0;
   ActionGate gate_;
   VisualIntent lastVisual_ = VisualIntent::Unknown;

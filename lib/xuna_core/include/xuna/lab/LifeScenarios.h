@@ -22,6 +22,11 @@ struct ScenarioReport {
   uint32_t suggestions = 0;
   uint32_t feedbackAcked = 0;    // feedback writes answered ok (0)
   uint32_t reactions = 0;        // pet / shoo presses that taught
+  uint32_t sessions = 0;         // routine sessions observed by the device
+  uint32_t anticipations = 0;    // times XUNA showed it expected the owner
+  uint32_t onTime = 0;           // last-week days anticipated ≤ 80 min before arrival
+  uint32_t falseAlarms = 0;      // last-week anticipations not before an arrival
+  bool habitReady = false;
   uint32_t feedbackCount = 0;    // durable count at the end
   uint32_t duplicatesRejected = 0;
   uint32_t checkpoints = 0;
@@ -248,6 +253,68 @@ class LifeScenarios {
     }
     if (lab.checkpointFailures()) return fail(r, "checkpoint failed");
     if (r.syncsAccepted < days - days / 10 - 1) return fail(r, "syncs rejected");
+    return finish(r, lab);
+  }
+
+  // Routine learning (plan §9.7 / part C, 2026-10-19). A routine owner
+  // arrives at 19:00 on weekdays and 09:00 at weekends (±20 min), syncs time
+  // from the app and presses XUNA a few times; a random owner arrives at a
+  // uniform time between 08:00 and 23:00. Counts anticipations in the last
+  // week: on time = within 80 min before that day's arrival (hour slots plus
+  // the lead); anything else is a false alarm.
+  static ScenarioReport learnsRoutine(const uint8_t* v1, size_t v1Size, bool randomOwner,
+                                      uint32_t days = 28, uint64_t seed = 21) {
+    ScenarioReport r;
+    r.days = days;
+    BoardLab lab;
+    lab.store().seedV1(v1, v1Size);
+    Pcg32 owner(seed, 13);
+    if (!lab.boot(0)) return fail(r, "boot not ready");
+    ++r.boots;
+    const uint32_t baseLocal = (kUtcBase - 1577836800U) / 60 + uint32_t(kTz);
+    uint32_t id = 0;
+    uint32_t plannedDay = 0xFFFFFFFFU;
+    uint32_t arrival = 0;  // local minute of day
+    bool anticipatedToday = false;
+    for (uint64_t t = 1000; t <= days * kDayMs; t += 1000) {
+      const uint32_t now = uint32_t(t);
+      const uint32_t local = baseLocal + uint32_t(t / 60000);
+      const uint32_t day = local / 1440;
+      const uint32_t minute = local % 1440;
+      if (day != plannedDay) {
+        plannedDay = day;
+        anticipatedToday = false;
+        arrival = randomOwner ? 8 * 60 + owner.below(15 * 60)
+                              : (HabitPredictor::weekend(day) ? 9 * 60 : 19 * 60) +
+                                    owner.below(41) - 20;
+      }
+      if (t % 60000 == 0 && minute >= arrival && minute < arrival + 30 &&
+          (minute - arrival) % 10 == 0) {
+        uint8_t frame[16];
+        if (minute == arrival &&
+            lab.command(frame, BoardLab::timeSync(frame, ++id, utc(t), kTz), now) == 0)
+          ++r.syncsAccepted;
+        lab.greeting(now);
+      }
+      lab.loop(now);
+      ++r.steps;
+      const LifeCoreStepOutput& out = lab.adapter().last();
+      if (out.anticipated) {
+        ++r.anticipations;
+        const bool lastWeek = day + 7 >= baseLocal / 1440 + days;
+        const bool before = minute < arrival && arrival - minute <= 80;
+        if (lastWeek && before && !anticipatedToday) ++r.onTime;
+        if (lastWeek && !before) ++r.falseAlarms;
+        anticipatedToday = anticipatedToday || before;
+      }
+      if (!invariants(lab, r)) return r;
+    }
+    r.habitReady = HabitPredictor::ready(lab.snapshot().habit);
+    r.sessions = lab.snapshot().habit.sessions;
+    // The learned routine survives a reboot (lazy checkpoint).
+    if (!lab.boot(0)) return fail(r, "reboot not ready");
+    ++r.boots;
+    if (lab.snapshot().habit.sessions == 0) return fail(r, "routine lost at reboot");
     return finish(r, lab);
   }
 

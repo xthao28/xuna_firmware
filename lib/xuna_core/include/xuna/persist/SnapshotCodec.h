@@ -5,6 +5,7 @@
 
 #include <xuna/LifeEngine.h>
 #include <xuna/base/Crc32.h>
+#include <xuna/learning/HabitPredictor.h>
 #include <xuna/learning/LearnerV3Codec.h>
 #include <xuna/learning/LearnerVocabulary.h>
 #include <xuna/life/Needs.h>
@@ -47,7 +48,7 @@ enum class SectionId : uint8_t {
   Needs = 4,
   Personality = 5,       // reserved: M06
   Learner = 6,
-  Habit = 7,             // reserved: M05d
+  Habit = 7,             // routine learning (plan §9.7), 2026-10-19
   Skills = 8,            // reserved: teachable tricks
   Dedup = 9,             // reserved: durable command idempotency
   Pointers = 10,         // reserved: log/memory consistency
@@ -87,6 +88,7 @@ struct LifeSnapshotV2 {
   NeedsState needs;
   PreferenceLearnerV3 learner;  // its config sets the shape loaded into RAM
   SnapshotEpisodes episodes;
+  HabitState habit;  // routine learning (plan §9.7); section 7 when non-empty
 
   explicit LifeSnapshotV2(const LearnerV3Config& config = productLearnerConfig())
       : learner(config) {}
@@ -119,6 +121,10 @@ class SnapshotCodec {
   // when such an episode exists, so older snapshots stay byte-identical and
   // an older reader skips the optional section instead of failing.
   static constexpr uint8_t kEpisodesReactionVersion = 2;
+  // Habit (id 7, optional): 48 × u16 counts, 48 × u8 mean minute, u16
+  // lastDay, i32 gain, u16 sessions.
+  static constexpr size_t kHabitSize = 3 * HabitState::kSlots + 2 + 4 + 2;
+  static constexpr uint8_t kHabitVersion = 1;
 
   static size_t encodedSize(const LifeSnapshotV2& s) {
     return kHeaderSize + kSectionHeaderSize + kCountersSize +
@@ -126,6 +132,7 @@ class SnapshotCodec {
            (s.hasNeeds ? kSectionHeaderSize + kNeedsSize : 0) +
            kSectionHeaderSize + LearnerV3Codec::encodedSize(s.learner.config()) +
            statedSectionSize(s) +
+           (s.habit.empty() ? 0 : kSectionHeaderSize + kHabitSize) +
            kSectionHeaderSize + kEpisodesSize + kTrailerSize;
   }
 
@@ -178,6 +185,19 @@ class SnapshotCodec {
       if (LearnerV3Codec::encodeStated(s.learner, p, statedSize) != statedSize)
         return 0;
       p += statedSize;
+    }
+
+    if (!s.habit.empty()) {
+      p = section(p, SectionId::Habit, false, kHabitVersion, kHabitSize);
+      for (uint8_t i = 0; i < HabitState::kSlots; ++i) {
+        put16(p + 2 * i, s.habit.counts[i]);
+        p[2 * HabitState::kSlots + i] = s.habit.minutes[i];
+      }
+      uint8_t* tail = p + 3 * HabitState::kSlots;
+      put16(tail, s.habit.lastDay);
+      put32(tail + 2, static_cast<uint32_t>(s.habit.gainQ16));
+      put16(tail + 6, s.habit.sessions);
+      p += kHabitSize;
     }
 
     bool reaction = false;
@@ -338,6 +358,21 @@ class SnapshotCodec {
         const LearnerDecodeResult r = LearnerV3Codec::decode(d, length, s.learner);
         if (!r.ok()) return LoadResult::Corrupt;
         info.droppedLearnerCells = r.droppedCells;
+        return LoadResult::Ok;
+      }
+      case SectionId::Habit: {
+        if (version > kHabitVersion) return LoadResult::Missing;
+        if (length != kHabitSize) return LoadResult::Corrupt;
+        for (uint8_t i = 0; i < HabitState::kSlots; ++i) {
+          s.habit.counts[i] = get16(d + 2 * i);
+          s.habit.minutes[i] = d[2 * HabitState::kSlots + i];
+          if (s.habit.minutes[i] > 59) return LoadResult::Corrupt;
+        }
+        const uint8_t* tail = d + 3 * HabitState::kSlots;
+        s.habit.lastDay = get16(tail);
+        s.habit.gainQ16 = static_cast<int32_t>(get32(tail + 2));
+        s.habit.sessions = get16(tail + 6);
+        if (s.habit.sessions == 0) return LoadResult::Corrupt;  // never written empty
         return LoadResult::Ok;
       }
       case SectionId::Episodes:

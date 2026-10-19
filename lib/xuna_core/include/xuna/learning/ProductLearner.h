@@ -123,7 +123,8 @@ class ProductLearner {
     return Result::Applied;
   }
 
-  // Forget learned preferences and episodes, keeping counters that describe
+  // Forget learned preferences, episodes and the learned routine (it says
+  // when the owner is around), keeping counters that describe
   // the pet's life (active time, generation) and the clock watermark. Like
   // v1 `LifeStorage::clear`,
   // the empty snapshot is committed to both A/B slots so an old one cannot

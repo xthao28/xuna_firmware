@@ -66,6 +66,25 @@ void reactions_alone_teach_the_owner_preference() {
   report("reactions happy", happy);
 }
 
+// Routine learning (plan §9.7): a routine owner is anticipated shortly
+// before arrival on most days of the last week, with no false alarms; a
+// random owner is never "learned".
+void routine_owner_is_anticipated_and_random_owner_is_not() {
+  for (uint64_t seed = 21; seed < 24; ++seed) {
+    const ScenarioReport routine = LifeScenarios::learnsRoutine(
+        xuna_fixture::scripted, LifeEngine::kSnapshotSize, false, 28, seed);
+    report("routine", routine);
+    TEST_ASSERT_TRUE(routine.habitReady);
+    TEST_ASSERT_TRUE(routine.onTime >= 4);
+    TEST_ASSERT_EQUAL_UINT32(0, routine.falseAlarms);
+    const ScenarioReport random = LifeScenarios::learnsRoutine(
+        xuna_fixture::scripted, LifeEngine::kSnapshotSize, true, 28, seed);
+    report("random", random);
+    TEST_ASSERT_FALSE(random.habitReady);
+    TEST_ASSERT_EQUAL_UINT32(0, random.anticipations);
+  }
+}
+
 // Same seed, same outcome.
 void scenarios_are_repeatable() {
   const ScenarioReport a = LifeScenarios::stability(
@@ -132,6 +151,7 @@ int main() {
   RUN_TEST(scenario_stability_100_days);
   RUN_TEST(scenarios_are_repeatable);
   RUN_TEST(reactions_alone_teach_the_owner_preference);
+  RUN_TEST(routine_owner_is_anticipated_and_random_owner_is_not);
   RUN_TEST(boot_migrates_v1_and_keeps_the_pet_id);
   RUN_TEST(boot_unhatched_device_never_saves_and_keeps_booting);
   return UNITY_END();
