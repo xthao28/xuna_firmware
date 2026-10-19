@@ -77,6 +77,24 @@ c++ -std=c++11 -O2 -Wall -Wextra -Werror -Ilib/xuna_core/include sim/scenarios.c
 | E | Migrated v1 pet, 10 reboots + 5 torn-write power cuts while rating: durable feedback = acks, resent rating never applied twice, PetId unchanged, age loss ≤ one checkpoint (300 s) |
 | Stability | 100 days of a seeded owner (ratings, late ratings, greetings, idle, syncs, a reboot every 10 days, one forget): invariants after every 1 s step |
 
+## S20 golden vectors (`golden.cpp`)
+
+`golden.cpp` boots `BoardLab` from a blank v1 snapshot (a migrated pet with
+no history), sends 27 v1 command frames (suggestions, ratings, a consumed and
+an unknown rating, a direct action, a stated preference, forget) and writes,
+per command, the frame, the adapter's result and the life / memory values the
+app reads. Output is deterministic.
+
+```text
+c++ -std=c++11 -O2 -Wall -Wextra -Werror -Ilib/xuna_core/include sim/golden.cpp -o golden
+./golden > sim/golden/learning_v1.json
+cp sim/golden/learning_v1.json ../mobile/test/fixtures/firmware/learning_v1.json
+```
+
+The mobile copy is checked by `test/features/device/data/firmware_golden_test.dart`
+(procedure: `mobile/test/fixtures/firmware/README.md`). Regenerate whenever the
+adapter, learner or v1 encoding changes, and commit both copies together.
+
 ## Learner-only runner (`lifelab.cpp`)
 
 ```text
