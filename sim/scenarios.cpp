@@ -12,10 +12,10 @@ namespace {
 bool print(const char* name, const xuna::ScenarioReport& r, double seconds) {
   std::printf(
       "%-9s %s steps=%llu boots=%u cuts=%u suggestions=%u acked=%u "
-      "feedback=%u duplicates_rejected=%u checkpoints=%u syncs=%u "
+      "reactions=%u feedback=%u duplicates_rejected=%u checkpoints=%u syncs=%u "
       "active_s=%u max_age_loss_s=%u runtime_s=%.2f%s%s\n",
       name, r.passed ? "PASS" : "FAIL", static_cast<unsigned long long>(r.steps),
-      r.boots, r.powerCuts, r.suggestions, r.feedbackAcked, r.feedbackCount,
+      r.boots, r.powerCuts, r.suggestions, r.feedbackAcked, r.reactions, r.feedbackCount,
       r.duplicatesRejected, r.checkpoints, r.syncsAccepted, r.activeSeconds,
       r.maxAgeLossSeconds, seconds, r.passed ? "" : " reason=", r.failure);
   return r.passed;
@@ -42,5 +42,9 @@ int main() {
        }) && ok;
   ok = timed("stability", [] { return xuna::LifeScenarios::stability(
         xuna_fixture::scripted, xuna::LifeEngine::kSnapshotSize, 100); }) && ok;
+  ok = timed("reactions", [] {
+         return xuna::LifeScenarios::learnsFromReactions(
+             xuna_fixture::scripted, xuna::LifeEngine::kSnapshotSize);
+       }) && ok;
   return ok ? 0 : 1;
 }

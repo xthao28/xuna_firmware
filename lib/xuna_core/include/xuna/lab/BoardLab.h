@@ -81,7 +81,7 @@ class BoardLab {
       if (ram_->local.choosePreferred(
               now, ram_->adapter.last().activity == Activity::Idle,
               static_cast<uint8_t>(ram_->adapter.preferred(0)), quietAction))
-        ram_->adapter.localAction(static_cast<ActionId>(quietAction), now);
+        ram_->adapter.localSpontaneous(now);
       if (last_.persistReady() && ram_->adapter.checkpointDue(now)) {
         ++checkpoints_;
         if (!ram_->adapter.checkpoint(now)) ++checkpointFailures_;
@@ -162,7 +162,7 @@ class BoardLab {
   // Everything main.cpp keeps in RAM (globals), rebuilt on every boot.
   struct Ram {
     explicit Ram(ISnapshotCommit& commit)
-        : gated(commit, identity), adapter(core, gated, false, true) {}
+        : gated(commit, identity), adapter(core, gated, true, true) {}
     IdentityService identity;
     IdentityGatedCommit gated;
     LifeCore core;

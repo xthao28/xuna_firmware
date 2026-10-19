@@ -41,6 +41,9 @@ struct LearnerV3Config {
   // and the cap on stated mass per cell, in ratings. Both [P] until S25.
   uint32_t statedWeightQ16 = 32768;  // w_s = 0.5
   uint32_t statedCapQ16 = 2U << 16;  // 2 explicit ratings
+  // Owner reaction on the device (pet = GPIO0, shoo = GPIO14) inside the
+  // reaction window (owner 2026-10-19, D6 revised): weaker than a rating. [P]
+  uint32_t reactionWeightQ16 = 19661;  // w_r = 0.3
 };
 
 struct V3Decision {
@@ -162,14 +165,17 @@ class PreferenceLearnerV3 {
 
   // Explicit feedback for a shown decision. Duplicates within the last eight
   // applied IDs and invalid decisions are rejected without side effects.
-  bool feedback(const V3Decision& decision, bool approved) {
-    if (!accepts(decision)) return false;
+  // `weightQ16` is the evidence mass of this signal: 1.0 for an explicit
+  // rating, `reactionWeightQ16` for an owner reaction.
+  bool feedback(const V3Decision& decision, bool approved,
+                uint32_t weightQ16 = 65536U) {
+    if (!accepts(decision) || weightQ16 == 0 || weightQ16 > 65536U) return false;
 
     trackError(decision.interaction, decision.predictedQ16, approved);
-    rate(cells_[decision.interaction][0][decision.action], approved);
+    rate(cells_[decision.interaction][0][decision.action], approved, weightQ16);
     if (decision.dayPart != 0)
       rate(cells_[decision.interaction][decision.dayPart][decision.action],
-           approved);
+           approved, weightQ16);
     lastRated_ = true;
     applied_[appliedNext_] = decision.id;
     appliedNext_ = static_cast<uint8_t>((appliedNext_ + 1U) % kHistory);
@@ -312,9 +318,9 @@ class PreferenceLearnerV3 {
                                     : (1U << config_.actions) - 1U);
   }
 
-  void rate(Cell& cell, bool approved) const {
-    cell.positive = discount(cell.positive) + (approved ? 65536U : 0U);
-    cell.negative = discount(cell.negative) + (approved ? 0U : 65536U);
+  void rate(Cell& cell, bool approved, uint32_t weightQ16) const {
+    cell.positive = discount(cell.positive) + (approved ? weightQ16 : 0U);
+    cell.negative = discount(cell.negative) + (approved ? 0U : weightQ16);
     if (cell.rated < 0xFFFFU) ++cell.rated;
     // Stated evidence ages with the cell like any other evidence.
     cell.statedPositive = clampStated(discount(uint32_t(cell.statedPositive) << 8),

@@ -82,13 +82,20 @@ class V1LifeCoreAdapter {
     return result;
   }
 
-  // GPIO14: explicit idle. Accepted direct input invalidates the decision.
+  // GPIO14: explicit idle. Right after XUNA acted it is also a "shoo"
+  // reaction (D6 revised 2026-10-19) that teaches before the idle request.
+  // Accepted direct input invalidates the decision.
   bool localIdle(uint32_t now) {
+    reactionApplied_ = false;
+    if (core_.reactionOpen(now)) react(false, now);
     return requestAction(static_cast<uint8_t>(ActionId::Idle), now);
   }
 
-  // GPIO0: learnable greeting (D5) when enabled, else the v1 Happy request.
+  // GPIO0: right after XUNA acted it is a "pet" reaction; otherwise the
+  // learnable greeting (D5) when enabled, else the v1 Happy request.
   bool localGreeting(uint32_t now) {
+    reactionApplied_ = false;
+    if (core_.reactionOpen(now)) return react(true, now);
     if (!greetingLearning_)
       return requestAction(static_cast<uint8_t>(ActionId::Happy), now);
     const LifeCoreEvent event(LifeCoreEventKind::Greeting);
@@ -101,6 +108,18 @@ class V1LifeCoreAdapter {
   bool localAction(ActionId action, uint32_t now) {
     return requestAction(static_cast<uint8_t>(action), now);
   }
+
+  // Offline routine with learning: XUNA chooses on its own in the quiet
+  // context, and the owner may react. Not app-rateable (decision_ cleared).
+  bool localSpontaneous(uint32_t now) {
+    const LifeCoreEvent event(LifeCoreEventKind::Spontaneous);
+    const LifeCoreStepOutput& out = step(event, now);
+    if (out.decisionShown) decision_ = 0;
+    return out.decisionShown;
+  }
+
+  // True when the last button press taught XUNA (pet or shoo).
+  bool lastReactionApplied() const { return reactionApplied_; }
 
   // Every loop: advance the core and count active lifetime.
   const LifeCoreStepOutput& tick(uint32_t now) {
@@ -263,6 +282,13 @@ class V1LifeCoreAdapter {
     return kUnknownOpcode;
   }
 
+  bool react(bool approved, uint32_t now) {
+    const LifeCoreEvent event(LifeCoreEventKind::Reaction, 0, 0, 0, approved);
+    reactionApplied_ = step(event, now).reactionApplied;
+    if (reactionApplied_) {decision_ = 0;explanation_=V3Decision();}
+    return reactionApplied_;
+  }
+
   bool requestAction(uint8_t action, uint32_t now) {
     const LifeCoreEvent event(LifeCoreEventKind::RequestAction, 0, 0, action);
     const bool accepted = step(event, now).actionAccepted;
@@ -285,6 +311,7 @@ class V1LifeCoreAdapter {
   CommandCache cache_;
   LifeCoreStepOutput last_;
   uint32_t decision_ = 0;
+  bool reactionApplied_ = false;
   uint8_t context_ = 0;
   uint8_t action_ = 0;
   uint32_t activeAt_ = 0;

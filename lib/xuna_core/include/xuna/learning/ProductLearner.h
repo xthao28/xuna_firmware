@@ -21,6 +21,11 @@ class ProductLearner {
 
   // D3 (owner-approved 2026-10-15): a shown reaction can be rated for 120 s.
   static constexpr uint32_t kFeedbackWindowMs = 120000;
+  // D6 revised (owner 2026-10-19): the owner's reaction on the device right
+  // after XUNA acts teaches it, weighted by `reactionWeightQ16`. [P]
+  static constexpr uint32_t kReactionWindowMs = 10000;
+  // Episode/feedback sources: 1 button rating, 2 confirmed text, 3 reaction.
+  static constexpr uint8_t kSourceReaction = 3;
 
   ProductLearner() : state_(productLearnerConfig()) {}
 
@@ -63,19 +68,30 @@ class ProductLearner {
     return true;
   }
 
+  // A reaction can still happen: a decision was shown less than
+  // kReactionWindowMs ago and has not been rated.
+  bool reactionOpen(uint32_t now) const {
+    return pending_.id != 0 && uint32_t(now - shownAt_) <= kReactionWindowMs;
+  }
+  uint32_t pendingId() const { return pending_.id; }
+
   Result feedback(uint32_t decisionId, bool approved, uint8_t source,
                   uint32_t now, ISnapshotCommit* commit) {
     expire(now);
     if (decisionId != 0 && decisionId == expiredId_) return Result::Expired;
-    if (source < 1 || source > 2 || pending_.id == 0 ||
-        decisionId != pending_.id || !state_.learner.accepts(pending_))
+    const bool reaction = source == kSourceReaction;
+    if (source < 1 || source > kSourceReaction || pending_.id == 0 ||
+        decisionId != pending_.id || !state_.learner.accepts(pending_) ||
+        (reaction && !reactionOpen(now)))
       return Result::Rejected;
     V3Decision shown = pending_;
     shown.predictedQ16 =
         state_.learner.view(shown.interaction, shown.dayPart, shown.action).pQ16;
 
     LifeSnapshotV2 staged = state_;
-    staged.learner.feedback(shown, approved);  // accepted above
+    staged.learner.feedback(  // accepted above
+        shown, approved,
+        reaction ? state_.learner.config().reactionWeightQ16 : 65536U);
     ++staged.counters.feedbackCount;
     SnapshotEpisodes& episodes = staged.episodes;
     LifeEngine::Episode& episode = episodes.items[episodes.next];

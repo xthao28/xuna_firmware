@@ -196,7 +196,9 @@ void s01_transcript_replays_through_lifecore() {
   a.encodeLife(life);
   TEST_ASSERT_EQUAL_UINT32(5, LifeEngine::get32(life + 12));
   TEST_ASSERT_EQUAL_UINT8(1, life[18]);
-  TEST_ASSERT_TRUE(a.localGreeting(t += kGap));
+  // Pressed after the 10 s reaction window (D6 revised 2026-10-19), as on the
+  // board: a direct request, not a pet.
+  TEST_ASSERT_TRUE(a.localGreeting(t += kGap + 1000));
 
   // Feedback for 5 after the button: invalid_argument, nothing learned.
   r = rig.send("010306000000010105000000", t += kGap, id);
@@ -320,13 +322,104 @@ void greeting_learning_keeps_v1_bytes_parseable() {
   rig.boot(1000);
   uint32_t id = 0;
   TEST_ASSERT_EQUAL_UINT8(0, rig.send("01 02 02 00 00 00 00 00", 2000, id));
-  TEST_ASSERT_TRUE(rig.adapter.localGreeting(12000));
+  // Outside the reaction window, so the press is a new greeting.
+  TEST_ASSERT_TRUE(rig.adapter.localGreeting(13000));
   uint8_t life[20];
   rig.adapter.encodeLife(life);
   TEST_ASSERT_TRUE(life[2] <= 1);
   TEST_ASSERT_EQUAL_UINT32(0, LifeEngine::get32(life + 12));
   TEST_ASSERT_EQUAL_UINT8(0, life[18]);
   TEST_ASSERT_TRUE(rig.adapter.last().hasDecision);  // greeting is pending
+}
+
+// D6 revised (owner 2026-10-19): the owner's reaction on the device right
+// after XUNA acts teaches it, weighted 0.3 and recorded with source 3.
+uint32_t positiveMass(const Rig& rig, uint8_t interaction, uint8_t action) {
+  return rig.core.learner().view(interaction, 0, action).positiveQ16;
+}
+uint32_t negativeMass(const Rig& rig, uint8_t interaction, uint8_t action) {
+  return rig.core.learner().view(interaction, 0, action).negativeQ16;
+}
+
+void pet_right_after_a_reaction_teaches_with_reaction_weight() {
+  Rig rig(true, true);
+  putS01Pet(rig.store);
+  rig.boot(1000);
+  uint32_t id = 0;
+  TEST_ASSERT_EQUAL_UINT8(0, rig.send("01 02 02 00 00 00 01 00", 2000, id));
+  uint8_t shown = 0;
+  TEST_ASSERT_TRUE(learnIndexFor(
+      static_cast<ActionId>(rig.adapter.last().selectedAction), shown));
+  uint8_t life[20];
+  rig.adapter.encodeLife(life);
+  const uint32_t count = LifeEngine::get32(life + 8);
+  const uint32_t before = positiveMass(rig, 1, shown);
+
+  TEST_ASSERT_TRUE(rig.adapter.localGreeting(6000));
+  TEST_ASSERT_TRUE(rig.adapter.lastReactionApplied());
+  TEST_ASSERT_TRUE(rig.adapter.last().reactionApplied);
+  rig.adapter.encodeLife(life);
+  TEST_ASSERT_EQUAL_UINT32(count + 1, LifeEngine::get32(life + 8));
+  TEST_ASSERT_EQUAL_UINT8(0, life[18]);  // nothing left to rate
+  // Discounted old mass plus w_r = 0.3 (19661 in Q16).
+  const uint32_t after = positiveMass(rig, 1, shown);
+  TEST_ASSERT_TRUE(after > before);
+  TEST_ASSERT_TRUE(after - before <= 19661U);
+  const SnapshotEpisodes& e = rig.core.snapshot().episodes;
+  const uint8_t latest = uint8_t((e.next + SnapshotEpisodes::kCapacity - 1) %
+                                 SnapshotEpisodes::kCapacity);
+  TEST_ASSERT_EQUAL_UINT8(ProductLearner::kSourceReaction, e.items[latest].source);
+  TEST_ASSERT_EQUAL_UINT8(1, e.items[latest].approved);
+
+  // A second press is a new greeting, not a second pet.
+  TEST_ASSERT_TRUE(rig.adapter.localGreeting(7000));
+  TEST_ASSERT_FALSE(rig.adapter.lastReactionApplied());
+  rig.adapter.encodeLife(life);
+  TEST_ASSERT_EQUAL_UINT32(count + 1, LifeEngine::get32(life + 8));
+}
+
+void shoo_right_after_a_reaction_teaches_negative_then_idles() {
+  Rig rig(true, true);
+  putS01Pet(rig.store);
+  rig.boot(1000);
+  uint32_t id = 0;
+  TEST_ASSERT_EQUAL_UINT8(0, rig.send("01 02 02 00 00 00 01 00", 2000, id));
+  uint8_t shown = 0;
+  TEST_ASSERT_TRUE(learnIndexFor(
+      static_cast<ActionId>(rig.adapter.last().selectedAction), shown));
+  const uint32_t before = negativeMass(rig, 1, shown);
+  rig.adapter.localIdle(5000);
+  TEST_ASSERT_TRUE(rig.adapter.lastReactionApplied());
+  TEST_ASSERT_TRUE(negativeMass(rig, 1, shown) > before);
+  TEST_ASSERT_FALSE(rig.adapter.last().hasDecision);
+}
+
+void press_after_the_reaction_window_teaches_nothing() {
+  Rig rig(true, true);
+  putS01Pet(rig.store);
+  rig.boot(1000);
+  uint32_t id = 0;
+  TEST_ASSERT_EQUAL_UINT8(0, rig.send("01 02 02 00 00 00 01 00", 2000, id));
+  const uint32_t count = rig.core.snapshot().counters.feedbackCount;
+  rig.adapter.tick(12001);
+  rig.adapter.localIdle(12001);
+  TEST_ASSERT_FALSE(rig.adapter.lastReactionApplied());
+  TEST_ASSERT_EQUAL_UINT32(count, rig.core.snapshot().counters.feedbackCount);
+}
+
+void spontaneous_choice_can_be_petted() {
+  Rig rig(true, true);
+  putS01Pet(rig.store);
+  rig.boot(1000);
+  TEST_ASSERT_TRUE(rig.adapter.localSpontaneous(70000));
+  TEST_ASSERT_EQUAL_UINT8(0, rig.adapter.last().decisionContext);  // quiet
+  uint8_t life[20];
+  rig.adapter.encodeLife(life);
+  TEST_ASSERT_EQUAL_UINT32(0, LifeEngine::get32(life + 12));  // not app-rateable
+  const uint32_t count = rig.core.snapshot().counters.feedbackCount;
+  TEST_ASSERT_TRUE(rig.adapter.localGreeting(73000));
+  TEST_ASSERT_TRUE(rig.adapter.lastReactionApplied());
+  TEST_ASSERT_EQUAL_UINT32(count + 1, rig.core.snapshot().counters.feedbackCount);
 }
 
 void reserved_decision_ids_and_unsupported_opcodes_are_rejected() {
@@ -413,6 +506,10 @@ void time_sync_accepts_frozen_frame_and_rejects_rollback() {
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(time_sync_accepts_frozen_frame_and_rejects_rollback);
+RUN_TEST(pet_right_after_a_reaction_teaches_with_reaction_weight);
+RUN_TEST(shoo_right_after_a_reaction_teaches_negative_then_idles);
+RUN_TEST(press_after_the_reaction_window_teaches_nothing);
+RUN_TEST(spontaneous_choice_can_be_petted);
   RUN_TEST(enhanced_explanation_is_commit_grounded_and_cleared_by_direct_input);
   RUN_TEST(enhanced_statements_are_committed_explained_and_deduplicated);
   RUN_TEST(enhanced_expiry_after_tick_has_a_dedicated_result);

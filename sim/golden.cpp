@@ -6,7 +6,9 @@
 //
 // The device is BoardLab (main.cpp setup()/loop() replica) booted from a blank
 // v1 snapshot, i.e. a migrated pet without history, so it can learn (an
-// unhatched device answers not_ready). Deterministic: rerun and diff.
+// unhatched device answers not_ready). The last steps are device button
+// presses (pet / greeting / shoo) that the app only observes through the
+// memory pages. Deterministic: rerun and diff.
 #include <cstdio>
 #include <cstring>
 
@@ -24,37 +26,43 @@ struct Step {
   uint8_t source;
   uint32_t target;  // feedback: rated request ID; stated: action << 8 | contextKey
   uint32_t gapMs;   // device time before this command
+  char button;      // 0 = BLE frame; 'A' GPIO0 (pet / greeting), 'B' GPIO14
 };
 
 // Request IDs are 1, 2, 3… in order, as the app's first session sends them.
 const Step kSteps[] = {
-    {"suggest", 2, 0, 0, 0, 1000},          // 1 quiet
-    {"feedback", 3, 1, 1, 1, 5000},         // 2 approve 1 (button)
-    {"suggest", 2, 1, 0, 0, 30000},         // 3 play
-    {"feedback", 3, 0, 2, 3, 5000},         // 4 reject 3 (confirmed text)
-    {"feedback", 3, 1, 1, 3, 2000},         // 5 rating 3 again: consumed
-    {"feedback", 3, 1, 1, 999, 2000},       // 6 unknown target
-    {"suggest", 2, 1, 0, 0, 30000},         // 7 play
-    {"animation", 1, 1, 0, 0, 2000},        // 8 direct happy: invalidates 7
-    {"feedback", 3, 1, 1, 7, 2000},         // 9 rating 7 after direct input
-    {"suggest", 2, 1, 0, 0, 30000},         // 10
-    {"feedback", 3, 1, 1, 10, 5000},        // 11
-    {"suggest", 2, 1, 0, 0, 30000},         // 12
-    {"feedback", 3, 0, 1, 12, 5000},        // 13
-    {"suggest", 2, 1, 0, 0, 30000},         // 14
-    {"feedback", 3, 1, 1, 14, 5000},        // 15
-    {"suggest", 2, 1, 0, 0, 30000},         // 16
-    {"feedback", 3, 0, 1, 16, 5000},        // 17
-    {"suggest", 2, 1, 0, 0, 30000},         // 18
-    {"feedback", 3, 1, 1, 18, 5000},        // 19
-    {"suggest", 2, 0, 0, 0, 30000},         // 20 quiet
-    {"feedback", 3, 1, 2, 20, 5000},        // 21
-    {"stated", 6, 1, 2, (3u << 8) | 0x10, 30000},  // 22 "likes curious when playing"
-    {"suggest", 2, 1, 0, 0, 30000},         // 23
-    {"feedback", 3, 1, 1, 23, 5000},        // 24
-    {"forget", 4, 0, 0, 0, 30000},          // 25
-    {"suggest", 2, 1, 0, 0, 30000},         // 26
-    {"feedback", 3, 1, 1, 26, 5000},        // 27
+    {"suggest", 2, 0, 0, 0, 1000, 0},       // 1 quiet
+    {"feedback", 3, 1, 1, 1, 5000, 0},         // 2 approve 1 (button)
+    {"suggest", 2, 1, 0, 0, 30000, 0},         // 3 play
+    {"feedback", 3, 0, 2, 3, 5000, 0},         // 4 reject 3 (confirmed text)
+    {"feedback", 3, 1, 1, 3, 2000, 0},         // 5 rating 3 again: consumed
+    {"feedback", 3, 1, 1, 999, 2000, 0},       // 6 unknown target
+    {"suggest", 2, 1, 0, 0, 30000, 0},         // 7 play
+    {"animation", 1, 1, 0, 0, 2000, 0},        // 8 direct happy: invalidates 7
+    {"feedback", 3, 1, 1, 7, 2000, 0},         // 9 rating 7 after direct input
+    {"suggest", 2, 1, 0, 0, 30000, 0},         // 10
+    {"feedback", 3, 1, 1, 10, 5000, 0},        // 11
+    {"suggest", 2, 1, 0, 0, 30000, 0},         // 12
+    {"feedback", 3, 0, 1, 12, 5000, 0},        // 13
+    {"suggest", 2, 1, 0, 0, 30000, 0},         // 14
+    {"feedback", 3, 1, 1, 14, 5000, 0},        // 15
+    {"suggest", 2, 1, 0, 0, 30000, 0},         // 16
+    {"feedback", 3, 0, 1, 16, 5000, 0},        // 17
+    {"suggest", 2, 1, 0, 0, 30000, 0},         // 18
+    {"feedback", 3, 1, 1, 18, 5000, 0},        // 19
+    {"suggest", 2, 0, 0, 0, 30000, 0},         // 20 quiet
+    {"feedback", 3, 1, 2, 20, 5000, 0},        // 21
+    {"stated", 6, 1, 2, (3u << 8) | 0x10, 30000, 0},  // 22 "likes curious when playing"
+    {"suggest", 2, 1, 0, 0, 30000, 0},         // 23
+    {"feedback", 3, 1, 1, 23, 5000, 0},        // 24
+    {"forget", 4, 0, 0, 0, 30000, 0},          // 25
+    {"suggest", 2, 1, 0, 0, 30000, 0},         // 26
+    {"feedback", 3, 1, 1, 26, 5000, 0},        // 27
+    // Device buttons (D6 revised 2026-10-19): no BLE frame, no request ID.
+    {"suggest", 2, 1, 0, 0, 30000, 0},         // 28
+    {"button", 0, 0, 0, 0, 3000, 'A'},      // pet: reaction to 28
+    {"button", 0, 0, 0, 0, 30000, 'A'},     // greeting: XUNA chooses (context 2)
+    {"button", 0, 0, 0, 0, 3000, 'B'},      // shoo: reaction to the greeting
 };
 
 size_t frame(uint8_t* b, const Step& s, uint32_t id) {
@@ -109,18 +117,33 @@ int main() {
     now += s.gapMs;
     lab.loop(now);
     uint8_t bytes[16];
-    const size_t size = frame(bytes, s, uint32_t(i + 1));
-    const uint8_t result = lab.command(bytes, size, now);
+    size_t size = 0;
+    unsigned result = 0;
+    if (s.button) {
+      const bool reacted = s.button == 'A' ? lab.greeting(now) : lab.idleButton(now);
+      result = lab.adapter().lastReactionApplied() ? 1u : 0u;
+      (void)reacted;
+    } else {
+      size = frame(bytes, s, uint32_t(i + 1));
+      result = lab.command(bytes, size, now);
+    }
     uint8_t life[20], page0[20], page1[20];
     lab.adapter().encodeLife(life);
     lab.adapter().encodeMemory(0, page0);
     lab.adapter().encodeMemory(1, page1);
-    std::printf("    {\"requestId\": %u, \"op\": \"%s\", \"opcode\": %u, \"argument\": %u, "
-                "\"source\": %u, \"target\": %u, \"atMs\": %u,\n     \"frame\": ",
-                unsigned(i + 1), s.op, s.opcode, s.arg, s.source, unsigned(s.target),
-                unsigned(now));
-    hex(bytes, size);
-    std::printf(", \"result\": %u,\n     \"life\": ", result);
+    if (s.button) {
+      // result: 1 when the press taught XUNA (a reaction), 0 otherwise.
+      std::printf("    {\"op\": \"button\", \"button\": \"%c\", \"atMs\": %u, "
+                  "\"reaction\": %u,\n     \"life\": ",
+                  s.button, unsigned(now), result);
+    } else {
+      std::printf("    {\"requestId\": %u, \"op\": \"%s\", \"opcode\": %u, \"argument\": %u, "
+                  "\"source\": %u, \"target\": %u, \"atMs\": %u,\n     \"frame\": ",
+                  unsigned(i + 1), s.op, s.opcode, s.arg, s.source, unsigned(s.target),
+                  unsigned(now));
+      hex(bytes, size);
+      std::printf(", \"result\": %u,\n     \"life\": ", result);
+    }
     hex(life, sizeof(life));
     std::printf(",\n     \"memory0\": ");
     hex(page0, sizeof(page0));

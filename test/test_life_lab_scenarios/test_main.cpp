@@ -54,6 +54,18 @@ void scenario_stability_100_days() {
   TEST_ASSERT_EQUAL_UINT32(10, r.boots);
 }
 
+// Reactions alone teach: the learned quiet choice follows the owner, for
+// either preference and with half the decisions ignored.
+void reactions_alone_teach_the_owner_preference() {
+  const ScenarioReport curious = LifeScenarios::learnsFromReactions(
+      xuna_fixture::scripted, LifeEngine::kSnapshotSize, 2, 1);
+  report("reactions curious", curious);
+  TEST_ASSERT_TRUE(curious.reactions > 20);
+  const ScenarioReport happy = LifeScenarios::learnsFromReactions(
+      xuna_fixture::scripted, LifeEngine::kSnapshotSize, 1, 2);
+  report("reactions happy", happy);
+}
+
 // Same seed, same outcome.
 void scenarios_are_repeatable() {
   const ScenarioReport a = LifeScenarios::stability(
@@ -119,6 +131,7 @@ int main() {
   RUN_TEST(scenario_e_reboots_and_power_cuts);
   RUN_TEST(scenario_stability_100_days);
   RUN_TEST(scenarios_are_repeatable);
+  RUN_TEST(reactions_alone_teach_the_owner_preference);
   RUN_TEST(boot_migrates_v1_and_keeps_the_pet_id);
   RUN_TEST(boot_unhatched_device_never_saves_and_keeps_booting);
   return UNITY_END();

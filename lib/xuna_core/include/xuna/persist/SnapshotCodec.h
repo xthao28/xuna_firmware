@@ -115,6 +115,10 @@ class SnapshotCodec {
   static constexpr uint8_t kCountersVersion = 1;
   static constexpr uint8_t kNeedsVersion = 1;
   static constexpr uint8_t kEpisodesVersion = 1;
+  // v2 (2026-10-19, D6 revised) adds source 3 = owner reaction. Written only
+  // when such an episode exists, so older snapshots stay byte-identical and
+  // an older reader skips the optional section instead of failing.
+  static constexpr uint8_t kEpisodesReactionVersion = 2;
 
   static size_t encodedSize(const LifeSnapshotV2& s) {
     return kHeaderSize + kSectionHeaderSize + kCountersSize +
@@ -176,7 +180,11 @@ class SnapshotCodec {
       p += statedSize;
     }
 
-    p = section(p, SectionId::Episodes, false, kEpisodesVersion, kEpisodesSize);
+    bool reaction = false;
+    for (uint8_t i = 0; i < SnapshotEpisodes::kCapacity; ++i)
+      reaction = reaction || s.episodes.items[i].source > 2;
+    p = section(p, SectionId::Episodes, false,
+                reaction ? kEpisodesReactionVersion : kEpisodesVersion, kEpisodesSize);
     p[0] = s.episodes.count;
     p[1] = s.episodes.next;
     for (uint8_t i = 0; i < SnapshotEpisodes::kCapacity; ++i) {
@@ -333,15 +341,15 @@ class SnapshotCodec {
         return LoadResult::Ok;
       }
       case SectionId::Episodes:
-        if (version > kEpisodesVersion) return LoadResult::Missing;
-        return parseEpisodes(d, length, s.episodes);
+        if (version > kEpisodesReactionVersion) return LoadResult::Missing;
+        return parseEpisodes(d, length, s.episodes, version >= 2 ? 3 : 2);
       default:
         return LoadResult::Missing;
     }
   }
 
   static LoadResult parseEpisodes(const uint8_t* d, uint16_t length,
-                                  SnapshotEpisodes& e) {
+                                  SnapshotEpisodes& e, uint8_t maxSource) {
     const uint8_t capacity = SnapshotEpisodes::kCapacity;
     if (length != kEpisodesSize || d[0] > capacity || d[1] >= capacity)
       return LoadResult::Corrupt;
@@ -355,7 +363,7 @@ class SnapshotCodec {
       item.source = d[5 + i * 4];
       if (item.context >= kLearnInteractionCount ||
           item.action >= kLearnActionCount || item.approved > 1 ||
-          item.source > 2)
+          item.source > maxSource)
         return LoadResult::Corrupt;
     }
     const uint8_t oldest = e.count == capacity ? e.next : 0;

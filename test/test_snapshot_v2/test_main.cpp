@@ -546,6 +546,34 @@ void test_failed_commit_keeps_ram_and_retries_same_slot() {
 
 void setUp() {}
 void tearDown() {}
+// Owner reactions (source 3) bump only the optional episodes section to v2:
+// older readers skip it, and snapshots without reactions stay v1 bytes.
+uint8_t episodesVersion(const uint8_t* bytes, size_t size) {
+  size_t p = SnapshotCodec::kHeaderSize;
+  while (p + 4 <= size) {
+    if ((bytes[p] & 0x7F) == uint8_t(SectionId::Episodes)) return bytes[p + 1];
+    p += 4 + size_t(bytes[p + 2] | (bytes[p + 3] << 8));
+  }
+  return 0;
+}
+
+void reaction_episodes_use_section_v2_only_when_present() {
+  LifeSnapshotV2 s;
+  s.episodes.count = 1;
+  s.episodes.next = 1;
+  s.episodes.items[0].source = 1;
+  uint8_t bytes[SnapshotCodec::kBudget];
+  size_t size = SnapshotCodec::encode(s, bytes, sizeof(bytes));
+  TEST_ASSERT_EQUAL_UINT8(1, episodesVersion(bytes, size));
+  s.episodes.items[0].source = 3;
+  size = SnapshotCodec::encode(s, bytes, sizeof(bytes));
+  TEST_ASSERT_EQUAL_UINT8(2, episodesVersion(bytes, size));
+  LifeSnapshotV2 back;
+  TEST_ASSERT_EQUAL_UINT8(uint8_t(LoadResult::Ok),
+                          uint8_t(SnapshotCodec::decode(bytes, size, back).result));
+  TEST_ASSERT_EQUAL_UINT8(3, back.episodes.items[0].source);
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_roundtrip_product_shape);
@@ -565,5 +593,6 @@ int main() {
   RUN_TEST(test_torn_write_sweep_between_generations);
   RUN_TEST(test_torn_first_v2_write_falls_back_to_v1);
   RUN_TEST(test_failed_commit_keeps_ram_and_retries_same_slot);
+  RUN_TEST(reaction_episodes_use_section_v2_only_when_present);
   return UNITY_END();
 }

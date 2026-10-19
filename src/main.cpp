@@ -24,7 +24,8 @@ xuna::IdentityService identity;
 // No snapshot is written before the pet has an identity (Egg devices).
 xuna::IdentityGatedCommit snapshotCommit(storeCommit,identity);
 xuna::LifeCore core;
-xuna::V1LifeCoreAdapter adapter(core,snapshotCommit,false,true);
+// Greeting learning on: owner reactions on the device teach it (D6 revised 2026-10-19).
+xuna::V1LifeCoreAdapter adapter(core,snapshotCommit,true,true);
 xuna::BleManager ble;
 xuna::DeviceKey deviceKey;
 bool bleReady = false, lifeReady = false, persistReady = false;
@@ -147,13 +148,16 @@ void loop() {
   if (bleReady && ble.update(adapter,readyIdentity,deviceKey,now,displayReady&&lifeReady))localBehavior.activity(now);
   const auto events = input.update(now);
   if(lifeReady){
-    if(events.happy&&adapter.localGreeting(now))Serial.println("button GPIO0: happy");
-    if(events.idle&&adapter.localIdle(now))Serial.println("button GPIO14: idle");
+    if(events.happy&&adapter.localGreeting(now))
+      Serial.println(adapter.lastReactionApplied()?"button GPIO0: pet (reaction)":"button GPIO0: greeting");
+    if(events.idle&&adapter.localIdle(now))
+      Serial.println(adapter.lastReactionApplied()?"button GPIO14: shoo (reaction), idle":"button GPIO14: idle");
     if(events.happy||events.idle)localBehavior.activity(now);
     uint8_t quietAction=0;
+    // Idle for a minute: XUNA picks what to do itself; the owner may react.
     if(localBehavior.choosePreferred(now,adapter.last().activity==xuna::Activity::Idle,
                                     static_cast<uint8_t>(adapter.preferred(0)),quietAction))
-      adapter.localAction(static_cast<xuna::ActionId>(quietAction),now);
+      adapter.localSpontaneous(now);
   }
   syncActivityVisual(now);
   logActivityChange(now);

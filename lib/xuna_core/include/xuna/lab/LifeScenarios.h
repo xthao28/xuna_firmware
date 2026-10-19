@@ -21,6 +21,7 @@ struct ScenarioReport {
   uint32_t powerCuts = 0;
   uint32_t suggestions = 0;
   uint32_t feedbackAcked = 0;    // feedback writes answered ok (0)
+  uint32_t reactions = 0;        // pet / shoo presses that taught
   uint32_t feedbackCount = 0;    // durable count at the end
   uint32_t duplicatesRejected = 0;
   uint32_t checkpoints = 0;
@@ -61,7 +62,9 @@ class LifeScenarios {
         if (result != 0 && result != 5) return fail(r, "suggest result");
         ++r.suggestions;
       }
-      if (t % (5 * kHourMs + 17 * 60000ULL) == 0) lab.greeting(now);
+      // No owner reaction either: greet only when XUNA is not waiting for one.
+      if (t % (5 * kHourMs + 17 * 60000ULL) == 0 && !lab.core().reactionOpen(now))
+        lab.greeting(now);
       if (t % kDayMs == 8 * kHourMs &&
           lab.command(frame, BoardLab::timeSync(frame, ++id, utc(t), kTz), now) == 0)
         ++r.syncsAccepted;
@@ -197,10 +200,14 @@ class LifeScenarios {
             // Mostly within D3's 120 s window, sometimes late.
             rateAt = t + uint64_t(5 + owner.below(kind == 5 ? 400 : 100)) * 1000;
           }
-        } else if (kind < 8) {
-          lab.greeting(now);
         } else {
-          lab.idleButton(now);
+          // A press right after XUNA acted is a pet / shoo reaction.
+          if (kind < 8) lab.greeting(now);
+          else lab.idleButton(now);
+          if (lab.adapter().lastReactionApplied()) {
+            ++r.reactions;
+            ++expectedFeedback;
+          }
         }
       }
       if (pending && t >= rateAt) {
@@ -241,6 +248,51 @@ class LifeScenarios {
     }
     if (lab.checkpointFailures()) return fail(r, "checkpoint failed");
     if (r.syncsAccepted < days - days / 10 - 1) return fail(r, "syncs rejected");
+    return finish(r, lab);
+  }
+
+  // Reactions alone teach (D6 revised 2026-10-19): XUNA acts on its own
+  // when idle; a simulated owner who likes `liked` and dislikes `disliked`
+  // reacts to only `reactPercent` % of them (pet / shoo within 3 s) and
+  // ignores the rest. After `days`, the learned quiet choice must be `liked`.
+  static ScenarioReport learnsFromReactions(const uint8_t* v1, size_t v1Size,
+                                            uint8_t liked = 2, uint8_t disliked = 1,
+                                            uint32_t days = 2, uint32_t reactPercent = 50,
+                                            uint64_t seed = 11) {
+    ScenarioReport r;
+    r.days = days;
+    BoardLab lab;
+    lab.store().seedV1(v1, v1Size);
+    Pcg32 owner(seed, 9);
+    if (!lab.boot(0)) return fail(r, "boot not ready");
+    ++r.boots;
+    uint64_t reactAt = 0;
+    bool pet = false;
+    for (uint64_t t = 1000; t <= days * kDayMs; t += 1000) {
+      const uint32_t now = uint32_t(t);
+      lab.loop(now);
+      ++r.steps;
+      const LifeCoreStepOutput& out = lab.adapter().last();
+      if (out.decisionShown) {
+        ++r.suggestions;
+        uint8_t shown = 0;
+        learnIndexFor(static_cast<ActionId>(out.selectedAction), shown);
+        reactAt = 0;
+        if ((shown == liked || shown == disliked) && owner.below(100) < reactPercent) {
+          reactAt = t + 1000 + uint64_t(owner.below(2000));
+          pet = shown == liked;
+        }
+      }
+      if (reactAt && t >= reactAt) {
+        if (pet) lab.greeting(now);
+        else lab.idleButton(now);
+        if (lab.adapter().lastReactionApplied()) ++r.reactions;
+        reactAt = 0;
+      }
+      if (!invariants(lab, r)) return r;
+    }
+    if (lab.core().preferred(LearnInteraction::QuietRequest) != liked)
+      return fail(r, "quiet preference did not follow the reactions");
     return finish(r, lab);
   }
 

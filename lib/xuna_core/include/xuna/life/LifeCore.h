@@ -23,6 +23,13 @@ enum class LifeCoreEventKind : uint8_t {
   // Confirmed statement (opcode 6): id = command id, context = contextKey
   // (interaction << 4 | day part), action = ActionId, approved = like.
   StatedPreference,
+  // Owner reaction on the device to the decision XUNA just showed (D6
+  // revised 2026-10-19): approved = pet (GPIO0), false = shoo (GPIO14).
+  // Ignored outside ProductLearner::kReactionWindowMs.
+  Reaction,
+  // XUNA picks what to do on its own while idle (offline quiet routine);
+  // a quiet-context decision the owner can react to.
+  Spontaneous,
 };
 
 // Core-facing event vocabulary. Transport adapters translate BLE/buttons/text
@@ -67,6 +74,7 @@ struct LifeCoreStepOutput {
   bool started = false;
   bool actionAccepted = false;
   bool learningFeedbackApplied = false;
+  bool reactionApplied = false;     // a Reaction taught the learner
   bool persistRequested = false;
   bool feedbackCommitted = false;  // urgent commit done before applying
   bool feedbackNotReady = false;   // commit failed; RAM unchanged (§9.5)
@@ -221,6 +229,9 @@ class LifeCore {
     return learner_.forget(commit_);
   }
 
+  // True while the owner can still react to the last shown decision.
+  bool reactionOpen(MonoMs now) const { return learner_.reactionOpen(now); }
+
   const LifeSnapshotV2& snapshot() const { return learner_.state(); }
   LifeSnapshotV2& snapshot() { return learner_.state(); }
   const PreferenceLearnerV3& learner() const { return learner_.learner(); }
@@ -257,12 +268,21 @@ class LifeCore {
         decide(LearnInteraction::ButtonGreeting, nextLocalId(), now, signals,
                output);
         return;
+      case LifeCoreEventKind::Spontaneous:
+        decide(LearnInteraction::QuietRequest, nextLocalId(), now, signals,
+               output);
+        return;
       case LifeCoreEventKind::StatedPreference:
         statePreference(event, output);
         return;
+      case LifeCoreEventKind::Reaction:
       case LifeCoreEventKind::Feedback: {
+        const bool reaction = event.kind == LifeCoreEventKind::Reaction;
+        if (reaction && !learner_.reactionOpen(now)) return;
         const ProductLearner::Result result = learner_.feedback(
-            event.id, event.approved, event.source, now, commit_);
+            reaction ? learner_.pendingId() : event.id, event.approved,
+            reaction ? ProductLearner::kSourceReaction : event.source, now,
+            commit_);
         if (result == ProductLearner::Result::Expired) {
           output.feedbackExpired = true;  // plan §9.5 rejection `expired`
           return;
@@ -275,6 +295,7 @@ class LifeCore {
         }
         if (result != ProductLearner::Result::Applied) return;
         output.learningFeedbackApplied = true;
+        output.reactionApplied = reaction;
         // With a committer the change is already durable; without one the
         // adapter must persist it afterwards (adapter-free tests).
         output.feedbackCommitted = commit_ != 0;
