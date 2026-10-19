@@ -24,6 +24,9 @@ count, final feedback count and generation. `sync <unix seconds> <tz
 minutes>` (S10 host part) calls `LifeCore::sync`; after it, decisions learn
 in day-part cells, and the CSV ends with `sync_accepted,sync_rejected`.
 
-The reserved `sync`, `day` and `expect` verbs are counted as unsupported until
-their trace/storage contracts are frozen. The runner does not write
+Since S19a (2026-10-19) `day <n>` lives n days in one-minute steps (past the
+`millis()` wrap), `reboot` restarts the core clock at 0, and `expect <path>
+<op> <value>` checks state (exit code 1 on a failure). After the CSV row the
+runner prints the snapshot SHA-256 and the last decision's explanation. Full
+grammar and outputs: [README.md](README.md). The runner does not write
 NVS/LittleFS or claim board validation.

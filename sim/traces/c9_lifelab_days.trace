@@ -1,0 +1,13 @@
+# lifecore_lab (S19a): rate play, live 60 days (past the millis() wrap), reboot, rate again. Expect all 6 checks to pass and identical output on every run.
+@+1000 choose 1 1
+@+1500 feedback 1 positive 1
+@+2000 expect feedback_count == 1
+@+3000 day 60
+@+4000 expect days == 60
+@+5000 reboot
+@+6000 expect feedback_count == 1
+@+7000 choose 2 1
+@+7500 feedback 2 positive 1
+@+8000 expect feedback_count == 2
+@+8000 expect generation == 2
+@+8000 expect persist_failures == 0

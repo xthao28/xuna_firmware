@@ -47,7 +47,8 @@ int run(std::istream& input) {
   std::cout << "processed,unsupported,rejected,choices,feedback_applied,"
                "persist_requests,persist_failures,reboots,final_event_count,"
                "final_generation,fingerprint,activity,visual,clock_quality,"
-               "utc_minute,sync_accepted,sync_rejected\n";
+               "utc_minute,sync_accepted,sync_rejected,days,expect_checked,"
+               "expect_failed,final_mono_ms\n";
   std::cout << report.processed << ',' << report.unsupported << ','
             << report.rejected << ',' << report.choices << ','
             << report.feedbackApplied << ',' << report.persistRequests << ','
@@ -58,7 +59,44 @@ int run(std::istream& input) {
             << static_cast<unsigned>(report.finalOutput.core.visual) << ','
             << static_cast<unsigned>(report.finalOutput.clockQuality) << ','
             << report.finalOutput.utcMinute << ',' << report.syncAccepted << ','
-            << report.syncRejected << "\n";
+            << report.syncRejected << ',' << report.simulatedDays << ','
+            << report.expectChecked << ',' << report.expectFailed << ','
+            << static_cast<unsigned long long>(report.finalMonoMs) << "\n";
+
+  static const char kHex[] = "0123456789abcdef";
+  std::cout << "snapshot_sha256=";
+  for (std::size_t i = 0; i < sizeof(report.snapshotSha256); ++i)
+    std::cout << kHex[report.snapshotSha256[i] >> 4]
+              << kHex[report.snapshotSha256[i] & 15];
+  std::cout << "\n";
+
+  // Evidence of the last shown decision (plan §9.6); the phone writes prose.
+  const xuna::V3Explanation& e = report.explanation;
+  std::cout << "explanation valid=" << (e.valid ? 1 : 0);
+  if (e.valid) {
+    std::cout << " interaction=" << unsigned(e.interaction)
+              << " day_part=" << unsigned(e.dayPart)
+              << " shown=" << unsigned(e.shownAction)
+              << " greedy=" << unsigned(e.greedyAction)
+              << " reason=" << unsigned(e.reason)
+              << " margin_q16=" << e.marginQ16;
+  }
+  std::cout << "\n";
+  for (uint8_t a = 0; e.valid && a < e.actionCount; ++a) {
+    const xuna::V3ExplanationCell& c = e.cells[a];
+    std::cout << "explanation_cell action=" << unsigned(c.action)
+              << " p_q16=" << c.pQ16 << " n_eff_q16=" << c.nEffQ16
+              << " positive_q16=" << c.positiveQ16
+              << " negative_q16=" << c.negativeQ16 << " rated=" << c.rated
+              << " fine=" << (c.fine ? 1 : 0) << "\n";
+  }
+
+  if (report.expectFailed != 0) {
+    std::cerr << "expect_failed=" << report.expectFailed
+              << " first_command=" << report.firstFailedCommand
+              << " actual=" << report.firstFailedActual << "\n";
+    return 1;
+  }
   return 0;
 }
 

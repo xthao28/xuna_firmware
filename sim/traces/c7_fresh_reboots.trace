@@ -1,6 +1,6 @@
-# lifecore_lab: reboots with no committed slot; sync 0 is rejected (invalid time); day/expect counted unsupported. Expect reboots 2, unsupported 2, sync rejected 1.
+# lifecore_lab: reboots with no committed slot; sync 0 is rejected (invalid time). Since S19a (2026-10-19) day/expect run: expect reboots 2, unsupported 0, days 1, expect_checked 1, sync rejected 1.
 @+1000 reboot
 @+2000 reboot
 @+3000 day 1
 @+4000 sync 0 0
-@+5000 expect events >= 0
+@+5000 expect feedback_count == 0

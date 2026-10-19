@@ -1,41 +1,72 @@
-# Learning Lab pre-S19a runner
+# Life Lab (S19a)
 
-`lifelab.cpp` is a host-only, learning-focused runner built on the same C++
-trace parser, shadow harness and prequential evaluator used by firmware tests.
-It is an offline preparation slice, not the complete S19a LifeCore simulator.
+Host-only tools that run the real `xuna_core` code on a PC. The S19a Life Lab
+is **`lifecore_lab.cpp`** ([LIFECORE_LAB.md](LIFECORE_LAB.md)): it replays a
+trace through `LifeCoreSession` + `LifeCore` with an in-memory A/B snapshot
+store that simulates power cuts. `lifelab.cpp` is the older learner-only
+runner (prequential/shadow metrics) and keeps its name for existing records.
 
-## Build
+## Build and run
 
-When a C++11 compiler is available:
+C++11 compiler, no PlatformIO needed:
+
+```text
+c++ -std=c++11 -Wall -Wextra -Werror -Ilib/xuna_core/include sim/lifecore_lab.cpp -o lifecore_lab
+./lifecore_lab sim/traces/c9_lifelab_days.trace     # or: ./lifecore_lab < trace
+```
+
+Exit code: 0 ok, 1 an `expect` failed (details on stderr), 2 invalid trace or
+I/O error. Output is deterministic for a given trace (seed 1, stream 3).
+
+## Trace grammar (design freeze, 2026-10-19)
+
+One command per line: `@+<ms> <verb> <args> [# comment]`. Blank lines and
+lines starting with `#` are ignored. `<ms>` is a decimal u32 and must not
+decrease from one command to the next. Each `day <n>` shifts every later
+command by n days, so long runs keep small `@+` values. At most 64 commands.
+
+| Verb | Arguments | Effect |
+| --- | --- | --- |
+| `choose` | `<id> <context>` | App suggestion (opcode 2): id ≥ 1, context 0 quiet / 1 play |
+| `feedback` | `<id> <outcome> <source>` | Rating of decision `<id>`; outcome `positive`/`negative` (also `1/0`, `true/false`, `approve(d)/reject(ed)`); source 0–2 |
+| `button` | `A` \| `B` | GPIO0 greeting (XUNA chooses) / GPIO14 direct idle |
+| `cmd` | `<hex>` | Direct action request, ActionId 0–3 (`0x` prefix optional) |
+| `sync` | `<unix s> <tz min>` | Phone time sync (S10) |
+| `reboot` | — | Recover from the A/B store; the core clock (`millis()`) restarts at 0 |
+| `powercut` | — | The next store write lands only half its bytes and fails |
+| `day` | `<n>` | Live n days (1–3650), one `LifeCore` step per simulated minute |
+| `expect` | `<path> <op> <u32>` | Check state; `op` is `==`, `!=`, `>=`, `<=`. A failure is counted and the run continues |
+
+`expect` paths: `feedback_count`, `generation`, `active_seconds`, `activity`,
+`visual`, `has_decision`, `clock_quality`, `day_part`, `preferred_quiet`,
+`preferred_play`, `preferred_greeting` (learner action index), and the run
+counters `choices`, `feedback_applied`, `persist_requests`, `persist_failures`,
+`reboots`, `sync_accepted`, `sync_rejected`, `days`. An unknown path makes
+the trace invalid (exit 2).
+
+Not simulated: the v1 adapter's active-time accounting and five-minute lazy
+checkpoint (`V1LifeCoreAdapter`), BLE, display and NVS/LittleFS. A `day`
+therefore writes nothing unless feedback arrives.
+
+## Outputs
+
+1. One CSV header + row (counters, final activity/visual/clock, `days`,
+   `expect_checked`, `expect_failed`, `final_mono_ms`). The first 17 columns
+   are unchanged from the pre-S19a runner.
+2. `snapshot_sha256=<hex>`: SHA-256 of the encoded LifeSnapshot v2.
+3. `explanation …` and one `explanation_cell …` per action: the evidence of
+   the last shown decision, as BLE READ `000b` projects it (plan §9.6).
+
+## Learner-only runner (`lifelab.cpp`)
 
 ```text
 c++ -std=c++11 -Wall -Wextra -Werror -Ilib/xuna_core/include sim/lifelab.cpp -o lifelab
 ```
 
-## Trace input
-
-Each line uses `@+<ms> <verb> <args>`. Comments start with `#`.
-
-The learner runner executes:
-
-```text
-@+10 choose 1 0
-@+20 feedback 1 positive 1
-@+30 choose 2 0
-@+40 feedback 2 rejected 1
-```
-
-The parser also reserves the broader S19a verbs `button`, `cmd`, `sync`,
-`reboot`, `powercut`, `day` and `expect`; they are parsed but not sent to the
-learner yet and are counted as `unsupported` by this pre-S19a binary.
-
-## Output and limits
-
-The runner emits one CSV header and one metrics row containing prequential
-samples/Brier values, shadow agreement, exploration, feedback rejection and a
-deterministic fingerprint. It keeps at most 64 trace events and an eight-entry
-decision window. It does not persist state, emulate NVS/LittleFS, run `LifeCore`
-or write to a board.
+It executes `choose`/`feedback` only and counts every other verb as
+`unsupported`. It emits one CSV row with prequential samples/Brier values,
+shadow agreement, exploration, feedback rejection and a fingerprint (at most
+64 events, eight-entry decision window, no persistence or `LifeCore`).
 
 ## Example traces
 
