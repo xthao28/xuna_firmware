@@ -57,6 +57,26 @@ therefore writes nothing unless feedback arrives.
 3. `explanation …` and one `explanation_cell …` per action: the evidence of
    the last shown decision, as BLE READ `000b` projects it (plan §9.6).
 
+## S19b scenarios (`scenarios.cpp`)
+
+`xuna/lab/BoardLab.h` replays the board: `BootSequence` (the same code as
+`main.cpp` setup()), `V1LifeCoreAdapter` with the production flags,
+`IdentityService`, the offline quiet routine and the five-minute checkpoint,
+over an in-memory store (A/B slots, identity, `bootc`). A reboot rebuilds
+every RAM object. Commands enter as v1 frame bytes. `xuna/lab/LifeScenarios.h`
+holds the scenarios; `test/test_life_lab_scenarios` runs them as tests.
+
+```text
+c++ -std=c++11 -O2 -Wall -Wextra -Werror -Ilib/xuna_core/include sim/scenarios.cpp -o scenarios
+./scenarios     # exit 0 when D, E and stability pass; prints runtimes
+```
+
+| Scenario | What it checks |
+| --- | --- |
+| D | 100 days, 800 suggestions, greetings, daily syncs, no rating: learner bit-identical to a fresh one, no episodes |
+| E | Migrated v1 pet, 10 reboots + 5 torn-write power cuts while rating: durable feedback = acks, resent rating never applied twice, PetId unchanged, age loss ≤ one checkpoint (300 s) |
+| Stability | 100 days of a seeded owner (ratings, late ratings, greetings, idle, syncs, a reboot every 10 days, one forget): invariants after every 1 s step |
+
 ## Learner-only runner (`lifelab.cpp`)
 
 ```text

@@ -1,6 +1,7 @@
 #pragma once
 #include <Preferences.h>
 #include <xuna/identity/IdentityRecord.h>
+#include <xuna/life/BootSequence.h>
 #include <xuna/persist/SnapshotStore.h>
 namespace xuna {
 // D2a (owner 2026-10-16): LifeSnapshot v2 in the existing NVS partition,
@@ -8,7 +9,7 @@ namespace xuna {
 // are only read (migration) and stay untouched for one release as the
 // rollback point. Identity (64 B) and the boot counter use their own keys.
 // Production store for the merged S13 + S18 switch.
-class NvsSnapshotStore : public ISnapshotStore {
+class NvsSnapshotStore : public IBootStore {
   Preferences prefs_;
   bool ready_=false;
   static const char* name(SnapshotKey key) {
@@ -36,14 +37,14 @@ class NvsSnapshotStore : public ISnapshotStore {
     return prefs_.putBytes(name(key),bytes,size)==size;
   }
   // Identity record (S06 codec, 64 B): Missing, or the raw bytes to decode.
-  IdentityLoad readIdentity(IdentityRecord& out) {
+  IdentityLoad readIdentity(IdentityRecord& out) override {
     if(!ready_||!prefs_.isKey("ident"))return IdentityLoad::Missing;
     uint8_t b[IdentityRecord::kEncodedSize];
     if(prefs_.getBytesLength("ident")!=sizeof(b)||prefs_.getBytes("ident",b,sizeof(b))!=sizeof(b))
       return IdentityLoad::Corrupt;
     return out.decode(b,sizeof(b));
   }
-  bool writeIdentity(const IdentityRecord& record) {
+  bool writeIdentity(const IdentityRecord& record) override {
     uint8_t b[IdentityRecord::kEncodedSize];
     return ready_&&record.encode(b)&&prefs_.putBytes("ident",b,sizeof(b))==sizeof(b);
   }
@@ -58,7 +59,7 @@ class NvsSnapshotStore : public ISnapshotStore {
     return ready_&&!prefs_.isKey("devkey")&&prefs_.putBytes("devkey",key,32)==32;
   }
   // Boot counter `bootc` (plan §7.1): incremented and committed at every boot.
-  uint32_t nextBoot() {
+  uint32_t nextBoot() override {
     if(!ready_)return 0;
     const uint32_t boot=prefs_.getUInt("bootc",0)+1;
     return prefs_.putUInt("bootc",boot)==sizeof(uint32_t)?boot:0;

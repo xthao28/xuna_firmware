@@ -7,6 +7,7 @@
 #include "BleManager.h"
 #include <xuna/LocalBehavior.h>
 #include <xuna/identity/IdentityService.h>
+#include <xuna/life/BootSequence.h>
 #include "NvsSnapshotStore.h"
 #include "DeviceKey.h"
 
@@ -97,45 +98,21 @@ void setup() {
   const uint32_t now = millis();
   input.begin(now); animation.begin(now); diagnosticsAt = now;
   const bool storageReady=storage.begin();
-  const uint32_t boot=storageReady ? storage.nextBoot() : 0;
   // Boot-only scratch is static so recovery does not add another snapshot to the stack.
   static xuna::LifeSnapshotV2 recovered;
-  const auto report=xuna::SnapshotStore::recover(storage,recovered);
-  lifeReady=storageReady&&boot&&(report.result==xuna::LoadResult::Ok ||
-      report.result==xuna::LoadResult::Migrated || report.result==xuna::LoadResult::Missing);
-  recovered.counters.bootCounter=boot;
-  recovered.hasNeeds=false; // cold-boot needs; never persist a stale recovered need state
-  if(report.result==xuna::LoadResult::Ok||report.result==xuna::LoadResult::Migrated)
-    core.restore(recovered);
-  xuna::IdentityRecord record;
-  const auto identityLoad=storage.readIdentity(record);
-  const bool migratedPet=report.result==xuna::LoadResult::Migrated;
-  identity.onBoot(boot,identityLoad,&record,migratedPet);
-  if(lifeReady&&identity.state()==xuna::IdentityState::NeedsMigration){
-    xuna::IdentityEntropy entropy;
-    for(size_t i=0;i<sizeof(entropy.petId);i+=4){
-      const uint32_t word=esp_random();std::memcpy(entropy.petId+i,&word,4);
-    }
-    entropy.seed=esp_random();
-    lifeReady=identity.prepareMigration(entropy,recovered.counters.activeSeconds,now,record)&&
-        storage.writeIdentity(record)&&identity.acceptPersisted(record);
-  }
-  if(identity.state()==xuna::IdentityState::Safe ||
-      (report.result==xuna::LoadResult::Ok && identityLoad==xuna::IdentityLoad::Missing))lifeReady=false;
-  // Persist the migration before enabling input; v1 rollback keys remain read-only.
-  if(lifeReady&&report.result==xuna::LoadResult::Migrated){
-    lifeReady=snapshotCommit.commit(recovered);
-    if(lifeReady)core.restore(recovered);
-  }
+  struct HardwareEntropy : xuna::IRandom { uint32_t next() override { return esp_random(); } } entropy;
+  const auto boot=xuna::BootSequence::run(storage,storageReady,snapshotCommit,core,identity,
+                                          entropy,recovered,now);
+  const auto& report=boot.recovery;
+  lifeReady=boot.lifeReady;
   Serial.printf("recover=%s slot=%d corrupt_slots=%u boot=%u ready=%u\n",
-                recoveryName(report.result),report.slot,report.corruptSlots,boot,lifeReady);
+                recoveryName(report.result),report.slot,report.corruptSlots,boot.boot,lifeReady);
   if(identity.state()==xuna::IdentityState::Ready){
     Serial.print("PetId=");
     for(uint8_t byte:identity.record().petId)Serial.printf("%02x",byte);
     Serial.println();
   }
-  core.snapshot().counters.bootCounter=boot;
-  core.begin(now,lifeReady);adapter.begin(now);
+  adapter.begin(now);
   Serial.printf("learner=ProductLearner-v3 preferred quiet=%u play=%u\n",
                 unsigned(adapter.preferred(0)),unsigned(adapter.preferred(1)));
   syncActivityVisual(now);logActivityChange(now);
