@@ -146,6 +146,33 @@ void core_trace_is_deterministic_and_explains_the_last_decision() {
   TEST_ASSERT_TRUE(first.explanation.actionCount > 0);
 }
 
+class CountingProbe : public LifeCoreStepProbe {
+ public:
+  void beforeStep() override { ++before; }
+  void afterStep() override { ++after; }
+  uint32_t before = 0;
+  uint32_t after = 0;
+};
+
+void core_trace_probe_wraps_every_step_without_changing_the_replay() {
+  LearningTraceDslCommand commands[3] = {};
+  commands[0] = command(10, LearningTraceVerb::Choose, 1, 1);
+  commands[1] = command(20, LearningTraceVerb::Feedback, 1, 1, true);
+  commands[2] = command(30, LearningTraceVerb::Day, 1);
+  LifeCoreTraceRunner runner;
+  LifeCoreTraceReport plain;
+  LifeCoreTraceReport probed;
+  CountingProbe probe;
+  TEST_ASSERT_TRUE(runner.run(commands, 3, plain));
+  TEST_ASSERT_TRUE(runner.run(commands, 3, probed, 1, 3, &probe));
+  // Two command steps + one step per minute of the day (boot is not a step).
+  TEST_ASSERT_EQUAL_UINT32(2 + 1440, probe.before);
+  TEST_ASSERT_EQUAL_UINT32(probe.before, probe.after);
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(plain.snapshotSha256, probed.snapshotSha256,
+                                sizeof(plain.snapshotSha256));
+  TEST_ASSERT_EQUAL_UINT32(plain.fingerprint, probed.fingerprint);
+}
+
 void core_trace_rejects_non_monotonic_time() {
   LearningTraceDslCommand commands[2] = {};
   commands[0] = command(20, LearningTraceVerb::Choose, 1, 0);
@@ -164,6 +191,7 @@ int main() {
   RUN_TEST(core_trace_reboot_restarts_the_core_clock);
   RUN_TEST(core_trace_rejects_zero_or_huge_day);
   RUN_TEST(core_trace_is_deterministic_and_explains_the_last_decision);
+  RUN_TEST(core_trace_probe_wraps_every_step_without_changing_the_replay);
   RUN_TEST(core_trace_rejects_non_monotonic_time);
   return UNITY_END();
 }

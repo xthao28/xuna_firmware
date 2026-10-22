@@ -11,6 +11,15 @@
 
 namespace xuna {
 
+// Optional hook around every LifeCore step (S21 target parity build): the
+// board measures step() time with it. It never changes the replay.
+class LifeCoreStepProbe {
+ public:
+  virtual ~LifeCoreStepProbe() {}
+  virtual void beforeStep() = 0;
+  virtual void afterStep() = 0;
+};
+
 struct LifeCoreTraceReport {
   uint32_t processed = 0;
   uint32_t unsupported = 0;
@@ -84,7 +93,7 @@ class LifeCoreTraceRunner {
 
   bool run(const LearningTraceDslCommand* commands, size_t count,
            LifeCoreTraceReport& report, uint64_t seed = 1,
-           uint64_t stream = 3) const {
+           uint64_t stream = 3, LifeCoreStepProbe* probe = nullptr) const {
     report = LifeCoreTraceReport();
     if (count > kMaxCommands || (count != 0 && !commands)) return false;
 
@@ -175,7 +184,7 @@ class LifeCoreTraceRunner {
           }
           const uint64_t end = now + uint64_t(command.value0) * kDayMs;
           for (uint64_t t = now + kDayStepMs; t <= end; t += kDayStepMs)
-            stepAt(lab, t - bootAt, report, shown);
+            stepAt(lab, t - bootAt, report, shown, probe);
           dayOffset += uint64_t(command.value0) * kDayMs;
           report.simulatedDays += command.value0;
           ++report.processed;
@@ -216,7 +225,7 @@ class LifeCoreTraceRunner {
         return false;
       }
 
-      stepAt(lab, now - bootAt, report, shown);
+      stepAt(lab, now - bootAt, report, shown, probe);
       ++report.processed;
     }
     const LifeCoreSession& session = lab.session();
@@ -237,8 +246,11 @@ class LifeCoreTraceRunner {
   // committer (§9.5): feedback is committed before it is applied, and a
   // failed commit leaves RAM unchanged.
   static void stepAt(LifeCoreSnapshotLab& lab, uint64_t now,
-                     LifeCoreTraceReport& report, V3Decision& shown) {
+                     LifeCoreTraceReport& report, V3Decision& shown,
+                     LifeCoreStepProbe* probe) {
+    if (probe) probe->beforeStep();
     report.finalOutput = lab.session().step(MonoMs(now));
+    if (probe) probe->afterStep();
     const LifeCoreStepOutput& core = report.finalOutput.core;
     if (core.learningFeedbackApplied) ++report.feedbackApplied;
     if (core.feedbackCommitted) ++report.persistRequests;

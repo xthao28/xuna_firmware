@@ -10,6 +10,7 @@
 #include <xuna/life/BootSequence.h>
 #include "NvsSnapshotStore.h"
 #include "DeviceKey.h"
+#include "ScenePreference.h"
 
 // Recovery and urgent commits stage several KB; ESP-IDF reports high water in bytes.
 SET_LOOP_TASK_STACK_SIZE(16384)
@@ -28,6 +29,8 @@ xuna::LifeCore core;
 xuna::V1LifeCoreAdapter adapter(core,snapshotCommit,true,true);
 xuna::BleManager ble;
 xuna::DeviceKey deviceKey;
+xuna::ScenePreference scenePreference;
+xuna::SceneMode sceneMode = xuna::SceneMode::Auto;
 bool bleReady = false, lifeReady = false, persistReady = false;
 bool displayReady = false;
 uint32_t diagnosticsAt = 0;
@@ -74,6 +77,10 @@ void syncActivityVisual(uint32_t now) {
   lastVisual=intent;
   animation.setIntent(intent,0,now);
 }
+const char* sceneName(xuna::SceneMode mode) {
+  static const char* const kNames[]={"auto","day","evening","night","rain"};
+  return kNames[static_cast<uint8_t>(mode)];
+}
 const char* recoveryName(xuna::LoadResult result) {
   switch(result) {
     case xuna::LoadResult::Ok: return "Ok";
@@ -96,6 +103,8 @@ void setup() {
       psramChipBytes != 8U * 1024U * 1024U)
     Serial.println("WARNING: memory differs from expected 16MB Flash / OPI PSRAM; verify board.");
   displayReady = display.begin();
+  sceneMode = scenePreference.load();
+  Serial.printf("scene_mode=%s\n", sceneName(sceneMode));
   Serial.println(displayReady ? "Display driver initialized; confirm LCD visually." :
                                 "ERROR: display dimensions/buffer allocation failed; input/logging continue.");
   const uint32_t now = millis();
@@ -147,12 +156,48 @@ void loop() {
       identity.state()==xuna::IdentityState::Ready ? &identity.record() : nullptr;
   if (bleReady && ble.update(adapter,readyIdentity,deviceKey,now,displayReady&&lifeReady))localBehavior.activity(now);
   const auto events = input.update(now);
-  if(lifeReady){
-    if(events.happy&&adapter.localGreeting(now))
+  // While a card is shown, any button only closes it.
+  const bool anyButton=events.happy||events.idle||events.happyHold||events.idleHold||events.bothHold;
+  bool consumed=false;
+  if(displayReady&&display.cardOpen()&&anyButton&&!events.bothHold){
+    display.closeCard();consumed=true;localBehavior.activity(now);
+    Serial.println("button: card closed");
+  }
+  if(lifeReady&&!consumed){
+    // A heart / puff above XUNA shows that the reaction taught it.
+    if(events.happy&&adapter.localGreeting(now)){
       Serial.println(adapter.lastReactionApplied()?"button GPIO0: pet (reaction)":"button GPIO0: greeting");
-    if(events.idle&&adapter.localIdle(now))
+      if(adapter.lastReactionApplied())display.showEffect(xuna::EffectKind::Heart,now);
+    }
+    if(events.idle&&adapter.localIdle(now)){
       Serial.println(adapter.lastReactionApplied()?"button GPIO14: shoo (reaction), idle":"button GPIO14: idle");
-    if(events.happy||events.idle)localBehavior.activity(now);
+      if(adapter.lastReactionApplied())display.showEffect(xuna::EffectKind::Puff,now);
+    }
+    // GPIO14 hold cycles the window scene. Off before hatch: in Egg the
+    // GPIO14 hold is reserved for hatching (S10 protocol freeze).
+    if(events.idleHold&&readyIdentity){
+      sceneMode=xuna::nextSceneMode(sceneMode);
+      const bool saved=scenePreference.save(sceneMode);
+      Serial.printf("button GPIO14: hold scene_mode=%s saved=%u\n",sceneName(sceneMode),saved?1u:0u);
+      display.showEffect(xuna::EffectKind::Sparkle,now);
+    }
+    // GPIO0 hold: status card (age, energy, what XUNA learned, usual arrival).
+    if(events.happyHold&&displayReady){
+      const bool shown=display.showStatus(xuna::makeStatusCard(core,adapter.last().needs.energy,animation.state(),
+                                                                 readyIdentity?readyIdentity->petId:nullptr),now);
+      Serial.printf("button GPIO0: hold status_card=%u\n",shown?1u:0u);
+    }
+    // Both buttons 3 s: pairing QR (PetId + device key prefix; nothing secret).
+    if(events.bothHold&&displayReady){
+      char uri[xuna::kPairingUriSize],shortId[9]="";
+      bool shown=false;
+      if(readyIdentity&&deviceKey.ready()&&xuna::pairingUri(readyIdentity->petId,deviceKey.publicKey(),uri,sizeof(uri))){
+        xuna::hexPrefix(readyIdentity->petId,4,shortId);
+        shown=display.showPairing(uri,shortId,now);
+      }
+      Serial.printf("button both: hold pairing_card=%u\n",shown?1u:0u);
+    }
+    if(anyButton)localBehavior.activity(now);
     uint8_t quietAction=0;
     // Idle for a minute: XUNA picks what to do itself; the owner may react.
     if(localBehavior.choosePreferred(now,adapter.last().activity==xuna::Activity::Idle,
@@ -162,7 +207,10 @@ void loop() {
   syncActivityVisual(now);
   logActivityChange(now);
   animation.update(now);
-  if(displayReady)display.update(now,animation.state());
+  if(displayReady){
+    display.setBackdrop(xuna::backdropFor(sceneMode,core.clock().dayPart(core.mono64())));
+    display.update(now,animation.state());
+  }
   if (bleReady) ble.stateChanged(animation.state(), now);
   if(persistReady&&adapter.checkpointDue(now)){
     const bool saved=adapter.checkpoint(now);
@@ -171,8 +219,8 @@ void loop() {
     if(!saved)Serial.println("ERROR: life snapshot save failed");
   }
   if (uint32_t(now - diagnosticsAt) >= xuna::kDiagnosticsMs) {
-    Serial.printf("scene=animated state=%s loop_gap_max_us=%u draws=%u draw_max_us=%u\n",
-                  (animation.state() == xuna::PetState::Idle ? "idle" : (animation.state() == xuna::PetState::Happy ? "happy" : (animation.state() == xuna::PetState::Sleep ? "sleep" : "curious"))), maxLoopGapUs, display.draws(), display.maxDrawUs());
+    Serial.printf("scene=animated state=%s loop_gap_max_us=%u draws=%u draw_max_us=%u scene_max_us=%u\n",
+                  (animation.state() == xuna::PetState::Idle ? "idle" : (animation.state() == xuna::PetState::Happy ? "happy" : (animation.state() == xuna::PetState::Sleep ? "sleep" : "curious"))), maxLoopGapUs, display.draws(), display.maxDrawUs(), display.maxSceneUs());
     logNeeds("needs", now);
     logMemory(); diagnosticsAt = now;
     maxLoopGapUs = 0;

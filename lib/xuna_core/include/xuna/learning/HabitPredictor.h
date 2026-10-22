@@ -126,6 +126,23 @@ class HabitPredictor {
     return withinDayTypeQ16(s, slotIndex) * 24 >= kExpectRatio * 65536U;
   }
 
+  // Status card: the usual arrival on a weekday or a weekend day, from the
+  // most frequent likely hour of that day type and its mean minute. False
+  // until ready() and while no hour of that day type is likely.
+  static bool usualArrival(const HabitState& s, bool weekendDay, uint8_t& hour,
+                           uint8_t& minute) {
+    if (!ready(s)) return false;
+    const uint8_t base = weekendDay ? 24 : 0;
+    bool found = false;
+    for (uint8_t h = 0; h < 24; ++h) {
+      const uint8_t i = uint8_t(base + h);
+      if (!isLikely(s, i)) continue;
+      if (!found || s.counts[i] > s.counts[base + hour]) { hour = h; found = true; }
+    }
+    if (found) minute = s.minutes[base + hour] < 60 ? s.minutes[base + hour] : 0;
+    return found;
+  }
+
   // Anticipation: the run of likely hours around (now + lead) gives an
   // expected arrival minute (count-weighted hour start + mean minute). True
   // once that arrival is at most kLeadMinutes away and still ahead; `key`

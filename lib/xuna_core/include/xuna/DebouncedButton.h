@@ -16,6 +16,7 @@ class DebouncedButton {
     }
     return false;
   }
+  bool pressed() const { return stable_; }
  private:
   bool raw_ = false;
   bool stable_ = false;

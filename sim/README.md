@@ -57,6 +57,25 @@ therefore writes nothing unless feedback arrives.
 3. `explanation …` and one `explanation_cell …` per action: the evidence of
    the last shown decision, as BLE READ `000b` projects it (plan §9.6).
 
+## Device card preview (`card_preview.cpp`)
+
+Renders the status and pairing cards with the real fonts and `xuna_core`
+code into `status_card.ppm` / `pairing_card.ppm` (320 × 170); build line in
+the file header. Re-run after changing `DeviceCards.h` and
+`tools/generate_ui_font.py`.
+
+## S21 target parity (`[env:xuna_parity]`)
+
+`src/parity/parity_main.cpp` replays `c3_cut_then_commit`, `c8_dayparts` and
+`c9_lifelab_days` (embedded at build time by `tools/embed_parity_traces.py`)
+on the ESP32 with the in-RAM store, prints the same lines as `lifecore_lab`
+plus `step()` timing, and repeats every 20 s. No BLE, display or NVS. Upload
+it, compare with the host, then upload `xuna_t_display_s3` again:
+
+```text
+~/.platformio/penv/bin/pio run -d firmware -e xuna_parity -t upload --upload-port /dev/cu.usbmodem14101
+```
+
 ## S19b scenarios (`scenarios.cpp`)
 
 `xuna/lab/BoardLab.h` replays the board: `BootSequence` (the same code as

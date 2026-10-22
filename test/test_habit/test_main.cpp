@@ -72,6 +72,22 @@ void expects_fires_shortly_before_the_usual_arrival() {
   TEST_ASSERT_FALSE(HabitPredictor::expects(s, day, 9 * 60, key));        // other hours
 }
 
+void usual_arrival_reports_the_likely_hour_per_day_type() {
+  HabitState s;
+  uint8_t hour = 0, minute = 0;
+  TEST_ASSERT_FALSE(HabitPredictor::usualArrival(s, false, hour, minute));
+  for (uint32_t d = 0; d < 28; ++d) {
+    const uint32_t day = kMonday + d;
+    HabitPredictor::observe(s, day, HabitPredictor::weekend(day) ? 9 * 60 + 40 : 19 * 60 + 10);
+  }
+  TEST_ASSERT_TRUE(HabitPredictor::usualArrival(s, false, hour, minute));
+  TEST_ASSERT_EQUAL_UINT8(19, hour);
+  TEST_ASSERT_EQUAL_UINT8(10, minute);
+  TEST_ASSERT_TRUE(HabitPredictor::usualArrival(s, true, hour, minute));
+  TEST_ASSERT_EQUAL_UINT8(9, hour);
+  TEST_ASSERT_EQUAL_UINT8(40, minute);
+}
+
 void habit_section_round_trips_and_is_omitted_when_empty() {
   LifeSnapshotV2 s;
   uint8_t bytes[SnapshotCodec::kBudget];
@@ -116,6 +132,7 @@ int main() {
   RUN_TEST(weekday_and_slots_follow_the_2020_epoch);
   RUN_TEST(decay_ages_counts_and_never_goes_back);
   RUN_TEST(probabilities_are_smoothed_and_normalised);
+  RUN_TEST(usual_arrival_reports_the_likely_hour_per_day_type);
   RUN_TEST(a_consistent_owner_gains_and_a_scattered_one_does_not);
   RUN_TEST(expects_fires_shortly_before_the_usual_arrival);
   RUN_TEST(habit_section_round_trips_and_is_omitted_when_empty);

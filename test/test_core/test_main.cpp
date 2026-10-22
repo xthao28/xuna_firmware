@@ -16,7 +16,9 @@ void test_core_baseline() {
   TEST_ASSERT_TRUE(!b.update(false, 1031)); // release: no press event
   TEST_ASSERT_TRUE(!b.update(true, 1040));
   TEST_ASSERT_TRUE(b.update(true, 1070));
+  TEST_ASSERT_TRUE(b.pressed());
   b.begin(true, 0); TEST_ASSERT_TRUE(!b.update(true, 50)); // held at boot
+  TEST_ASSERT_TRUE(b.pressed());
   b.begin(false, UINT32_MAX - 20);
   TEST_ASSERT_TRUE(!b.update(true, UINT32_MAX - 10));
   TEST_ASSERT_TRUE(b.update(true, 19)); // rollover

@@ -6,4 +6,14 @@ constexpr uint16_t kWidth=320,kHeight=170,kSpriteWidth=96,kSpriteHeight=72;
 constexpr uint16_t kAnchorX=112,kAnchorY=72,kFrameCount=128,kTransparent=0xf81f;
 extern const uint16_t kBackground[kWidth*kHeight];
 extern const uint16_t kFrames[kFrameCount*kSpriteWidth*kSpriteHeight];
+// Window backdrops (Backdrop order: Day, Evening, Night, Rain), frame included.
+constexpr uint16_t kWindowX=9,kWindowY=15,kWindowW=75,kWindowH=81,kWindowCount=4;
+// Glass (incl. mullion) where rain falls, relative to the screen; mullion columns are skipped.
+constexpr uint16_t kGlassX=13,kGlassY=19,kGlassW=67,kGlassH=73,kMullionX0=43,kMullionX1=46;
+constexpr uint16_t kRainColor=0xbe3b,kStarBright=0xffb9,kStarDim=0x6b74,kStarCount=10;
+extern const uint16_t kWindows[kWindowCount*kWindowW*kWindowH];
+extern const uint8_t kStarX[kStarCount],kStarY[kStarCount];
+// Effect region above the head (wall only) and its sprites (Heart, Puff, Sparkle).
+constexpr uint16_t kEffectX=154,kEffectY=42,kEffectW=16,kEffectH=30,kEffectSpriteW=13,kEffectSpriteH=11,kEffectCount=3;
+extern const uint16_t kEffects[kEffectCount*kEffectSpriteW*kEffectSpriteH];
 }}
