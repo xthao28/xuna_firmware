@@ -89,7 +89,8 @@ void approximate_and_failure() {
 }
 void identity_characteristic() {
  IdentityRecord record;record.hatchBootCounter=3;record.origin=IdentityOrigin::MigratedFromV1;
- for(unsigned i=0;i<16;++i)record.petId[i]=uint8_t(0xa0+i);record.petId[6]=0x46;record.petId[8]=0x88;
+ for(unsigned i=0;i<16;++i)record.petId[i]=uint8_t(0xa0+i);
+ record.petId[6]=0x46;record.petId[8]=0x88;
  uint8_t bytes[IdentityCodec::kSize];std::memset(bytes,0xee,sizeof(bytes));
  TEST_ASSERT_EQUAL_UINT32(24,sizeof(bytes));
  TEST_ASSERT_TRUE(IdentityCodec::encode(&record,0x01020304,bytes));

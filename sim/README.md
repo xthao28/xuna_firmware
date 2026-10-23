@@ -98,6 +98,24 @@ c++ -std=c++11 -O2 -Wall -Wextra -Werror -Ilib/xuna_core/include sim/scenarios.c
 | Routine / random | Owner arrives at 19:00 on weekdays and 09:00 at weekends (or at random times) for 28 days: XUNA must anticipate the routine owner shortly before arrival with no false alarms, and never the random one |
 | Reactions | XUNA acts on its own when idle; a simulated owner pets what they like and shoos what they do not, reacting to only part of the choices: the learned quiet choice must follow the owner |
 
+## Personality PE-0 baseline (`personality_lab.cpp`)
+
+How far XUNAs differ through learning alone, before any temperament
+(personality plan PE-0). Each run boots `BoardLab` from a fresh migrated v1
+pet and lives 30 local days in 1 s steps with an `OwnerModel` owner who is
+around at 07:00 (30 min) and 19:00 (2 h), syncs time on arrival, greets every
+15 min and pets / shoos 30 % of XUNA's choices while present. Scenarios:
+owner profiles × seeds, PetId entropy only, absence, random, noisy, silent,
+one bad day, alternating, reversal, sparse, teacher. Output is deterministic
+CSV (`run,…` per run, `metric,…` per result); runtime goes to stderr.
+
+```text
+c++ -std=c++11 -O2 -Wall -Wextra -Werror -Ilib/xuna_core/include sim/personality_lab.cpp -o personality_lab
+./personality_lab > pe0.txt     # ≈ 8 s, exit 0 unless a run hits ERROR_SAFE or a failed checkpoint
+```
+
+Report: parent `docs/research/PE0-baseline.md`.
+
 ## S20 golden vectors (`golden.cpp`)
 
 `golden.cpp` boots `BoardLab` from a blank v1 snapshot (a migrated pet with

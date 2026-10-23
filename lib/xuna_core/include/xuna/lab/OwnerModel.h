@@ -14,6 +14,13 @@ enum class OwnerKind : uint8_t {
   Reversal,     // §9.9 C: preferred action switches at changeAt
   Drift,        // gradual: approval moves linearly over driftLength trials
   NoFeedback,   // §9.9 D: interactions, never a rating
+  // Personality PE-0 owners (2026-10-23). Same fixed preferences as Oracle
+  // unless noted; every probability is a Proposed lab value.
+  Noisy,        // weak likes: noisyPreferredQ16 / noisyOtherQ16
+  Sparse,       // reacts rarely: sparseRateQ16 instead of rateQ16
+  Random,       // no real preference: every action randomQ16
+  Teacher,      // always reacts, always consistent (1 / 0)
+  Alternating,  // preferred / laterPreferred swap every `period` trials
 };
 
 struct OwnerConfig {
@@ -30,6 +37,11 @@ struct OwnerConfig {
   uint16_t rateQ16 = 65535;       // P(owner rates a shown action)
   uint32_t changeAt = 0;
   uint32_t driftLength = 1;
+  uint16_t noisyPreferredQ16 = 39322;  // 0.6
+  uint16_t noisyOtherQ16 = 26214;      // 0.4
+  uint16_t sparseRateQ16 = 3277;       // 0.05
+  uint16_t randomQ16 = 32768;          // 0.5
+  uint32_t period = 1;                 // Alternating, in trials
 };
 
 class OwnerModel {
@@ -41,6 +53,7 @@ class OwnerModel {
     if (config_.actions == 0 || config_.actions > OwnerConfig::kMaxActions)
       config_.actions = 1;
     if (config_.driftLength == 0) config_.driftLength = 1;
+    if (config_.period == 0) config_.period = 1;
   }
 
   const OwnerConfig& config() const { return config_; }
@@ -56,6 +69,19 @@ class OwnerModel {
         return action == before ? config_.preferredQ16 : config_.otherQ16;
       case OwnerKind::Reversal: {
         const uint8_t target = trial < config_.changeAt ? before : after;
+        return action == target ? config_.preferredQ16 : config_.otherQ16;
+      }
+      case OwnerKind::Sparse:
+        return action == before ? config_.preferredQ16 : config_.otherQ16;
+      case OwnerKind::Noisy:
+        return action == before ? config_.noisyPreferredQ16
+                                : config_.noisyOtherQ16;
+      case OwnerKind::Random:
+        return config_.randomQ16;
+      case OwnerKind::Teacher:
+        return action == before ? 65535U : 0;
+      case OwnerKind::Alternating: {
+        const uint8_t target = (trial / config_.period) % 2 ? after : before;
         return action == target ? config_.preferredQ16 : config_.otherQ16;
       }
       case OwnerKind::Drift: {
@@ -88,6 +114,9 @@ class OwnerModel {
 
   bool rates(IRandom& random) const {
     if (config_.kind == OwnerKind::NoFeedback) return false;
+    if (config_.kind == OwnerKind::Teacher) return true;
+    if (config_.kind == OwnerKind::Sparse)
+      return draw(random, config_.sparseRateQ16);
     return draw(random, config_.rateQ16);
   }
 

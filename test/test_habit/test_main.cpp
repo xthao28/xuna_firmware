@@ -100,7 +100,12 @@ void habit_section_round_trips_and_is_omitted_when_empty() {
   LifeSnapshotV2 back;
   TEST_ASSERT_EQUAL_UINT8(uint8_t(LoadResult::Ok),
                           uint8_t(SnapshotCodec::decode(bytes, with, back).result));
-  TEST_ASSERT_EQUAL_UINT8_ARRAY(&s.habit, &back.habit, sizeof(HabitState));
+  // Field by field: HabitState has padding bytes that the codec never writes.
+  TEST_ASSERT_EQUAL_UINT16_ARRAY(s.habit.counts, back.habit.counts, HabitState::kSlots);
+  TEST_ASSERT_EQUAL_UINT8_ARRAY(s.habit.minutes, back.habit.minutes, HabitState::kSlots);
+  TEST_ASSERT_EQUAL_UINT16(s.habit.lastDay, back.habit.lastDay);
+  TEST_ASSERT_EQUAL_INT32(s.habit.gainQ16, back.habit.gainQ16);
+  TEST_ASSERT_EQUAL_UINT16(s.habit.sessions, back.habit.sessions);
 }
 
 void no_trusted_time_no_routine_and_forget_clears_it() {

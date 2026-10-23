@@ -64,6 +64,54 @@ void owner_sampling_is_deterministic_and_respects_rate() {
   for (uint32_t i = 0; i < 100; ++i) TEST_ASSERT_FALSE(silent.rates(first));
 }
 
+void personality_owner_kinds_follow_their_definition() {
+  OwnerConfig config = oracle();
+  config.laterPreferred[0] = 2;
+  config.actions = 3;
+  config.kind = OwnerKind::Noisy;
+  OwnerModel noisy(config);
+  TEST_ASSERT_EQUAL_UINT16(39322, noisy.approveQ16(0, 0, 1));
+  TEST_ASSERT_EQUAL_UINT16(26214, noisy.approveQ16(0, 0, 0));
+  TEST_ASSERT_EQUAL_UINT8(1, noisy.bestAction(0, 0));
+
+  config.kind = OwnerKind::Random;
+  OwnerModel random(config);
+  for (uint8_t a = 0; a < 3; ++a)
+    TEST_ASSERT_EQUAL_UINT16(32768, random.approveQ16(9, 0, a));
+  TEST_ASSERT_EQUAL_UINT8(0, random.bestAction(9, 0));
+
+  config.kind = OwnerKind::Teacher;
+  config.rateQ16 = 0;
+  OwnerModel teacher(config);
+  Pcg32 draws(3, 7);
+  for (uint32_t i = 0; i < 50; ++i) {
+    TEST_ASSERT_TRUE(teacher.rates(draws));
+    TEST_ASSERT_TRUE(teacher.approves(i, 0, 1, draws));
+    TEST_ASSERT_FALSE(teacher.approves(i, 0, 2, draws));
+  }
+
+  config.kind = OwnerKind::Alternating;
+  config.period = 3;
+  OwnerModel alternating(config);
+  TEST_ASSERT_EQUAL_UINT8(1, alternating.bestAction(2, 0));
+  TEST_ASSERT_EQUAL_UINT8(2, alternating.bestAction(3, 0));
+  TEST_ASSERT_EQUAL_UINT8(2, alternating.bestAction(5, 0));
+  TEST_ASSERT_EQUAL_UINT8(1, alternating.bestAction(6, 0));
+}
+
+void sparse_owner_reacts_rarely() {
+  OwnerConfig config = oracle();
+  config.kind = OwnerKind::Sparse;
+  config.rateQ16 = 65535;  // ignored: Sparse uses sparseRateQ16 (5%)
+  OwnerModel owner(config);
+  TEST_ASSERT_EQUAL_UINT16(58982, owner.approveQ16(0, 0, 1));
+  Pcg32 draws(5, 1);
+  uint32_t rated = 0;
+  for (uint32_t i = 0; i < 4000; ++i)
+    if (owner.rates(draws)) ++rated;
+  TEST_ASSERT_TRUE(rated > 120 && rated < 280);
+}
+
 void bench_is_deterministic_per_seed() {
   OwnerModel owner(oracle());
   BenchConfig config;
@@ -147,6 +195,8 @@ int main() {
   UNITY_BEGIN();
   RUN_TEST(owner_probabilities_follow_scenario);
   RUN_TEST(owner_sampling_is_deterministic_and_respects_rate);
+  RUN_TEST(personality_owner_kinds_follow_their_definition);
+  RUN_TEST(sparse_owner_reacts_rarely);
   RUN_TEST(bench_is_deterministic_per_seed);
   RUN_TEST(no_feedback_leaves_learners_fresh);
   RUN_TEST(static_baseline_regret_is_exact);
