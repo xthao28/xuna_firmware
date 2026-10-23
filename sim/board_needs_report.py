@@ -3,7 +3,7 @@
 
 Reads the `needs ...` (every 5 s) and `activity_change ...` lines printed by
 main.cpp and reports, per boot: first rest, awake/rest cycle lengths, energy
-range and time shares. Compare with docs/roadmap/life-lab-needs-timeline-2026-10-15.md
+range and time shares. Compare with docs/roadmap/learning/life-lab-needs-timeline-2026-10-15.md
 (first rest ~48 min, then ~25 min awake / ~4 min resting, energy 25-64%).
 
 Example:

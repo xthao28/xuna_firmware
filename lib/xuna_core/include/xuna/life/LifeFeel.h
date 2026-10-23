@@ -10,8 +10,8 @@ namespace xuna {
 
 // Life-feel configuration chosen in Life Lab against the owner-approved
 // targets (2026-10-15). Approved for a board trial; values remain provisional
-// until the owner's board check. See docs/roadmap/life-lab-needs-timeline-
-// 2026-10-15.md.
+// until the owner's board check. See
+// docs/roadmap/learning/life-lab-needs-timeline-2026-10-15.md.
 inline LifeTuning lifeFeelTuning() {
   LifeTuning tuning;
   tuning.energyRecoveryPerMinute = 6144;

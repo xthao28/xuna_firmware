@@ -132,7 +132,7 @@ shadow agreement, exploration, feedback rejection and a fingerprint (at most
 [traces/](traces/) holds annotated traces for `lifelab` (`l*.trace`) and
 `lifecore_lab` (`c*.trace`); the first line of each states the expected result.
 Results are recorded in
-[lifecore-lab-runs-2026-10-15.md](../../docs/roadmap/lifecore-lab-runs-2026-10-15.md).
+[lifecore-lab-runs-2026-10-15.md](../../docs/roadmap/learning/lifecore-lab-runs-2026-10-15.md).
 
 ## Closed-loop learning bench
 
@@ -145,8 +145,8 @@ g++ -std=c++11 -Wall -Wextra -Werror -O2 -Ilib/xuna_core/include sim/learning_be
 ./learning_bench [--seeds N] [--gamma G] [--curves]
 ```
 
-Results: [life-lab-phase0-2026-10-15.md](../../docs/roadmap/life-lab-phase0-2026-10-15.md).
-Learner v3 results: [learner-v3-phase1-2026-10-15.md](../../docs/roadmap/learner-v3-phase1-2026-10-15.md).
+Results: [life-lab-phase0-2026-10-15.md](../../docs/roadmap/learning/life-lab-phase0-2026-10-15.md).
+Learner v3 results: [learner-v3-phase1-2026-10-15.md](../../docs/roadmap/learning/learner-v3-phase1-2026-10-15.md).
 
 ## Learner v3 parameter sweep
 
@@ -171,7 +171,7 @@ g++ -std=c++11 -Wall -Wextra -Werror -O2 -Ilib/xuna_core/include sim/life_timeli
 python sim/life_sweep.py ./life_timeline
 ```
 
-Results: [life-lab-needs-timeline-2026-10-15.md](../../docs/roadmap/life-lab-needs-timeline-2026-10-15.md).
+Results: [life-lab-needs-timeline-2026-10-15.md](../../docs/roadmap/learning/life-lab-needs-timeline-2026-10-15.md).
 
 ## Migration check (S13 + S18 preparation)
 

@@ -10,7 +10,7 @@ using namespace xuna;
 namespace {
 
 // S08a: observed BLE v1 bytes from the owner's board (S01, 2026-10-13,
-// docs/roadmap/S01-v1-observed-transcript.md), firmware c84d4e3.
+// docs/roadmap/sessions/S01-v1-observed-transcript.md), firmware c84d4e3.
 size_t hex(const char* text, uint8_t* out) {
   size_t n = 0;
   int high = -1;
