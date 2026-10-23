@@ -116,6 +116,15 @@ c++ -std=c++11 -O2 -Wall -Wextra -Werror -Ilib/xuna_core/include sim/personality
 
 Report: parent `docs/research/PE0-baseline.md`.
 
+PE-1d adds `xuna/lab/PersonalityShadow.h` beside every life: temperament
+genome from `IdentityRecord.seed`, evidence ledger, drives and affect watch
+owner inputs, shown decisions and pet / shoo, consolidate at each session end
+and record what a drive-aware choice would have shown. Behaviour is
+unchanged (the `metric,…` lines stay byte-identical). Extra output:
+`pe1,…` per scenario, `long_owners` (90-day lives), `sweep,…` (ledger
+minimum sessions × coherence) and `drives,…` (drive weight). ≈ 33 s.
+Report: parent `docs/research/PE1-G1-report.md`.
+
 ## S20 golden vectors (`golden.cpp`)
 
 `golden.cpp` boots `BoardLab` from a blank v1 snapshot (a migrated pet with

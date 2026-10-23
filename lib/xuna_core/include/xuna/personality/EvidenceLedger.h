@@ -48,9 +48,11 @@ enum class EvidenceReason : uint8_t {
   FeedbackSurprise,    // feedback far from what XUNA expected
   ConversationPraise,  // P-D4 tag
   ConversationScold,   // P-D4 tag
+  PlayRewarded,        // owner petted a playful (happy) choice
+  PlayShooed,          // owner shooed a playful (happy) choice
 };
 
-constexpr uint8_t kEvidenceReasonCount = 11;
+constexpr uint8_t kEvidenceReasonCount = 13;
 
 struct JournalEntry {
   uint16_t sequence = 0;  // 0 = empty slot
@@ -74,6 +76,15 @@ struct TraitLedger {
   uint16_t sourceWeight[kEvidenceSourceCount] = {};  // Σ |w·e| >> 6
 };
 
+// Consolidation thresholds; the defaults are the PE-1a values. Life Lab sweeps them.
+struct LedgerConfig {
+  int32_t minImportance = 24576;    // 1.5 [P]
+  uint8_t minSessions = 3;          // [P]
+  int32_t coherenceQ14 = 8192;      // |pending| ≥ 0.5 · importance [P]
+  int32_t maxStep = 492;            // 0.03 [P]
+  int32_t maxSessionShare = 8192;   // 0.5 per session [P]
+};
+
 struct ConsolidationReport {
   uint8_t shifted = 0;   // traits moved
   uint8_t decayed = 0;   // traits whose evidence disagreed
@@ -82,11 +93,14 @@ struct ConsolidationReport {
 class EvidenceLedger {
  public:
   static constexpr uint8_t kJournalSize = 4;
-  static constexpr int32_t kMinImportance = 24576;  // 1.5 [P]
+  static constexpr int32_t kMinImportance = 24576;  // LedgerConfig defaults
   static constexpr uint8_t kMinSessions = 3;        // [P]
   static constexpr int32_t kMaxStep = 492;          // 0.03 [P]
   static constexpr int32_t kMaxPending = 65536;     // ±4.0 [P]
   static constexpr int32_t kMaxSessionShare = 8192; // 0.5 per session [P]
+
+  explicit EvidenceLedger(const LedgerConfig& config = LedgerConfig()) : config_(config) {}
+  const LedgerConfig& config() const { return config_; }
 
   static int16_t weight(EvidenceSource source) {
     switch (source) {
@@ -122,15 +136,14 @@ class EvidenceLedger {
     }
     const int32_t magnitude = contribution < 0 ? -contribution : contribution;
     // Only the part of this session still under its share reaches the ledger.
-    const int32_t net = clamp(l.sessionNet, kMaxSessionShare);
-    const int32_t mag = l.sessionMagnitude < kMaxSessionShare ? l.sessionMagnitude
-                                                              : kMaxSessionShare;
+    const int32_t share = config_.maxSessionShare;
+    const int32_t net = clamp(l.sessionNet, share);
+    const int32_t mag = l.sessionMagnitude < share ? l.sessionMagnitude : share;
     l.sessionNet = clamp(l.sessionNet + contribution, kMaxPending);
     l.sessionMagnitude = l.sessionMagnitude > kMaxPending - magnitude
                              ? kMaxPending : l.sessionMagnitude + magnitude;
-    const int32_t newMag = l.sessionMagnitude < kMaxSessionShare ? l.sessionMagnitude
-                                                                 : kMaxSessionShare;
-    l.pending = clamp(l.pending + clamp(l.sessionNet, kMaxSessionShare) - net, kMaxPending);
+    const int32_t newMag = l.sessionMagnitude < share ? l.sessionMagnitude : share;
+    l.pending = clamp(l.pending + clamp(l.sessionNet, share) - net, kMaxPending);
     l.importance += newMag - mag;
     addWeight(l.reasonWeight[r], magnitude);
     addWeight(l.sourceWeight[s], magnitude);
@@ -149,11 +162,12 @@ class EvidenceLedger {
         if (l.sessionNet > 0) ++positive;
         if (l.sessionNet < 0) ++negative;
       }
-      if (l.importance < kMinImportance || sessions < kMinSessions) continue;
+      if (l.importance < config_.minImportance || sessions < config_.minSessions) continue;
       const uint32_t agreeing = l.pending > 0 ? positive : l.pending < 0 ? negative : 0;
       const int32_t strength = l.pending < 0 ? -l.pending : l.pending;
-      if (agreeing * 3 >= sessions * 2 && strength * 2 >= l.importance) {
-        const int32_t step = int32_t((int64_t(kMaxStep) * l.pending) / l.importance);
+      if (agreeing * 3 >= sessions * 2 &&
+          int64_t(strength) * kTraitOne >= int64_t(config_.coherenceQ14) * l.importance) {
+        const int32_t step = int32_t((int64_t(config_.maxStep) * l.pending) / l.importance);
         const int16_t applied =
             Temperament::shift(temperament, static_cast<TraitId>(t), static_cast<int16_t>(step));
         record(t, l, applied, sessions);
@@ -230,6 +244,7 @@ class EvidenceLedger {
     head_ = static_cast<uint8_t>((head_ + 1) % kJournalSize);
   }
 
+  LedgerConfig config_;
   TraitLedger traits_[kTraitCount];
   JournalEntry journal_[kJournalSize];
   uint8_t head_ = 0;

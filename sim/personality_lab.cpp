@@ -1,5 +1,6 @@
-// Personality PE-0 baseline (plan docs/roadmap/personality, 2026-10-23).
-// How far do XUNAs differ through learning alone, before any temperament?
+// Personality PE-0 baseline and PE-1d shadow (plan docs/roadmap/personality,
+// 2026-10-23). How far do XUNAs differ through learning alone, and what would
+// the temperament genome, drives and affect add (PersonalityShadow)?
 // Host only, lab only; nothing here runs on the board:
 //   c++ -std=c++11 -O2 -Wall -Wextra -Werror -Ilib/xuna_core/include sim/personality_lab.cpp -o personality_lab
 //   ./personality_lab > pe0.txt      (deterministic; runtime goes to stderr)
@@ -22,6 +23,7 @@
 
 #include <xuna/lab/BoardLab.h>
 #include <xuna/lab/OwnerModel.h>
+#include <xuna/lab/PersonalityShadow.h>
 #include <xuna/learning/LearnerVocabulary.h>
 
 #include "../test/fixtures/v1_snapshots.h"
@@ -30,7 +32,8 @@ namespace {
 
 using namespace xuna;
 
-constexpr uint32_t kMaxDays = 30;
+constexpr uint32_t kMaxDays = 90;      // capacity; millis() wraps after 49.7 days (LifeCore extends it)
+constexpr uint32_t kDefaultDays = 30;
 constexpr uint8_t kInteractions = kLearnInteractionCount;
 constexpr uint8_t kParts = LearnerV3Config::kMaxDayParts;
 constexpr uint8_t kActions = kLearnActionCount;
@@ -39,6 +42,8 @@ constexpr uint64_t kDayMs = 1440 * kMinuteMs;
 constexpr uint32_t kUtcBase = 1792026000U;  // 2026-10-15 05:00 UTC = 12:00 local
 constexpr int16_t kTz = 420;                // Asia/Ho_Chi_Minh
 constexpr uint32_t kNever = 0xFFFFFFFFU;
+// Last week of a 30-day life: local days 23–29.
+constexpr uint32_t kWeekFrom = 23, kWeekTo = 29;
 // Cells compared: quiet (spontaneous) and greeting; play needs the app.
 const uint8_t kCompared[] = {0, 2};
 
@@ -47,12 +52,21 @@ struct Day {
   uint8_t greedy[kInteractions][kParts];  // learner at the end of the day
   uint32_t fingerprint;
   uint32_t decisions, pets, shoos;
+  // PE-1d shadow
+  uint32_t shadow[kInteractions][kParts][kActions];  // what drives + genome would show
+  int16_t trait[kTraitCount];                         // effective, end of day
+  int64_t moodSum;                                    // mood valence, one sample a minute
+  int16_t moodMin, moodMax;
+  uint32_t moodSamples;
 };
 
 struct Life {
   Day day[kMaxDays];
   uint32_t days;
   uint32_t bootFingerprint;
+  uint32_t petSeed;  // IdentityRecord::seed
+  uint32_t shifts, decays, sessions, evidence;
+  TemperamentState genome;  // end of life
 };
 
 struct Run {
@@ -63,6 +77,7 @@ struct Run {
   uint32_t days;
   uint32_t absentFrom;   // owner stops coming from this local day
   uint32_t badDay;       // owner shoos everything on this local day
+  ShadowConfig shadow;
 };
 
 // Owner preference profiles per interaction (quiet, play, greeting);
@@ -88,7 +103,7 @@ Run run(const char* name, const OwnerConfig& o, uint64_t seed) {
   r.owner = o;
   r.ownerSeed = seed;
   r.entropySeed = seed;
-  r.days = kMaxDays;
+  r.days = kDefaultDays;
   r.absentFrom = kNever;
   r.badDay = kNever;
   return r;
@@ -101,21 +116,35 @@ void greedyInto(const BoardLab& lab, Day& d) {
   d.fingerprint = lab.core().learner().fingerprint();
 }
 
-void count(const LifeCoreStepOutput& out, Day& d) {
+void endDay(const BoardLab& lab, const PersonalityShadow& shadow, Day& d) {
+  greedyInto(lab, d);
+  for (uint8_t i = 0; i < kTraitCount; ++i)
+    d.trait[i] = Temperament::effective(shadow.genome(), static_cast<TraitId>(i));
+}
+
+// A decision XUNA showed: count it, and what the shadow would have shown.
+void count(const LifeCoreStepOutput& out, const BoardLab& lab, PersonalityShadow& shadow, Day& d) {
   uint8_t action = 0;
   if (!learnIndexFor(static_cast<ActionId>(out.selectedAction), action)) return;
   if (out.decisionContext >= kInteractions || out.decisionDayPart >= kParts) return;
   ++d.shown[out.decisionContext][out.decisionDayPart][action];
   ++d.decisions;
+  shadow.shown(out, lab.core().learner());
+  const uint8_t alt = shadow.choose(out.decisionContext, out.decisionDayPart, lab.core().learner());
+  ++d.shadow[out.decisionContext][out.decisionDayPart][alt];
+  shadow.noteShadowAction(alt);
 }
 
 bool live(const Run& spec, Life& life) {
-  std::memset(&life, 0, sizeof(life));
+  life = Life();
   life.days = spec.days;
   BoardLab lab(spec.entropySeed);
   lab.store().seedV1(xuna_fixture::fresh, sizeof(xuna_fixture::fresh));
   if (!lab.boot(0)) return false;
   life.bootFingerprint = lab.core().learner().fingerprint();
+  life.petSeed = lab.identity().record().seed;
+  PersonalityShadow shadow(life.petSeed, spec.shadow);
+  shadow.begin(0);
   const OwnerModel model(spec.owner);
   Pcg32 rng(spec.ownerSeed, 17);
   const uint32_t baseLocal = (kUtcBase - 1577836800U) / 60 + uint32_t(kTz);
@@ -133,8 +162,10 @@ bool live(const Run& spec, Life& life) {
     const uint32_t d = local / 1440 - firstDay;
     const uint32_t minute = local % 1440;
     if (d != planned) {
-      if (planned != kNever) greedyInto(lab, life.day[planned]);
+      if (planned != kNever) endDay(lab, shadow, life.day[planned]);
       planned = d;
+      life.day[d].moodMin = 32767;
+      life.day[d].moodMax = -32768;
       window[0][0] = 7 * 60 - 30 + rng.below(61);
       window[0][1] = window[0][0] + 30;
       window[1][0] = 19 * 60 - 30 + rng.below(61);
@@ -152,29 +183,43 @@ bool live(const Run& spec, Life& life) {
       if (arrival)
         lab.command(frame, BoardLab::timeSync(frame, ++id, kUtcBase + uint32_t(t / 1000), kTz),
                     now);
-      if (minute % 15 == 0 && !reactAt && !lab.core().reactionOpen(now) &&
-          lab.greeting(now)) {
-        const LifeCoreStepOutput& out = lab.adapter().last();
-        count(out, day);
-        uint8_t shown = 0;
-        learnIndexFor(static_cast<ActionId>(out.selectedAction), shown);
-        if (d == spec.badDay || model.rates(rng)) {
-          reactAt = t + 1000 + uint64_t(rng.below(3000));
-          reactPet = d != spec.badDay && model.approves(d, out.decisionContext, shown, rng);
+      if (minute % 15 == 0 && !reactAt && !lab.core().reactionOpen(now)) {
+        shadow.ownerInput(now);
+        if (lab.greeting(now)) {
+          const LifeCoreStepOutput& out = lab.adapter().last();
+          count(out, lab, shadow, day);
+          uint8_t shown = 0;
+          learnIndexFor(static_cast<ActionId>(out.selectedAction), shown);
+          if (d == spec.badDay || model.rates(rng)) {
+            reactAt = t + 1000 + uint64_t(rng.below(3000));
+            reactPet = d != spec.badDay && model.approves(d, out.decisionContext, shown, rng);
+          }
         }
       }
     }
     // A pet is GPIO0: only inside the reaction window, or it would be a greeting.
     if (reactAt && t >= reactAt && lab.core().reactionOpen(now)) {
+      shadow.ownerInput(now);
       if (reactPet) lab.greeting(now);
       else lab.idleButton(now);
-      if (lab.adapter().lastReactionApplied()) ++(reactPet ? day.pets : day.shoos);
+      if (lab.adapter().lastReactionApplied()) {
+        ++(reactPet ? day.pets : day.shoos);
+        shadow.reaction(reactPet);
+      }
       reactAt = 0;
     }
     lab.loop(now);
     const LifeCoreStepOutput& out = lab.adapter().last();
+    shadow.step(now, out);
+    if (onMinute) {
+      const int16_t mood = shadow.affect().state().moodValence;
+      day.moodSum += mood;
+      ++day.moodSamples;
+      if (mood < day.moodMin) day.moodMin = mood;
+      if (mood > day.moodMax) day.moodMax = mood;
+    }
     if (out.decisionShown) {
-      count(out, day);
+      count(out, lab, shadow, day);
       reactAt = 0;
       if (present && (d == spec.badDay || model.rates(rng))) {
         uint8_t shown = 0;
@@ -185,17 +230,33 @@ bool live(const Run& spec, Life& life) {
     }
     if (lab.checkpointFailures() || out.activity == Activity::ErrorSafe) return false;
   }
-  greedyInto(lab, life.day[planned]);
+  endDay(lab, shadow, life.day[planned]);
+  life.shifts = shadow.shifts();
+  life.decays = shadow.decays();
+  life.sessions = shadow.sessions();
+  life.evidence = shadow.evidence();
+  life.genome = shadow.genome();
   return true;
 }
 
 // ---- metrics (host doubles; never part of xuna_core) ----
 
-uint32_t cell(const Life& l, uint32_t from, uint32_t to, uint8_t i, uint8_t p, double out[kActions]) {
+// The learner's side of a day (what XUNA really showed), not the shadow.
+bool sameLearnerDay(const Day& a, const Day& b) {
+  return std::memcmp(a.shown, b.shown, sizeof(a.shown)) == 0 &&
+         std::memcmp(a.greedy, b.greedy, sizeof(a.greedy)) == 0 &&
+         a.fingerprint == b.fingerprint && a.decisions == b.decisions && a.pets == b.pets &&
+         a.shoos == b.shoos;
+}
+
+// `shadow`: what the PE-1 shadow would have shown instead of what XUNA showed.
+uint32_t cell(const Life& l, uint32_t from, uint32_t to, uint8_t i, uint8_t p, double out[kActions],
+              bool shadow = false) {
   uint32_t n[kActions] = {};
   uint32_t total = 0;
   for (uint32_t d = from; d <= to && d < l.days; ++d)
-    for (uint8_t a = 0; a < kActions; ++a) n[a] += l.day[d].shown[i][p][a];
+    for (uint8_t a = 0; a < kActions; ++a)
+      n[a] += shadow ? l.day[d].shadow[i][p][a] : l.day[d].shown[i][p][a];
   for (uint8_t a = 0; a < kActions; ++a) total += n[a];
   for (uint8_t a = 0; a < kActions; ++a) out[a] = total ? double(n[a]) / total : 0;
   return total;
@@ -218,12 +279,13 @@ struct Distance {
 
 // Mean JS over the compared cells that both windows sampled ≥ minSamples times.
 Distance distance(const Life& a, uint32_t af, uint32_t at, const Life& b, uint32_t bf,
-                  uint32_t bt, uint32_t minSamples) {
+                  uint32_t bt, uint32_t minSamples, bool shadow = false) {
   Distance r = {0, 0};
   for (uint8_t i : kCompared)
     for (uint8_t p = 0; p < kParts; ++p) {
       double x[kActions], y[kActions];
-      if (cell(a, af, at, i, p, x) < minSamples || cell(b, bf, bt, i, p, y) < minSamples)
+      if (cell(a, af, at, i, p, x, shadow) < minSamples ||
+          cell(b, bf, bt, i, p, y, shadow) < minSamples)
         continue;
       r.value += js(x, y);
       ++r.cells;
@@ -269,6 +331,126 @@ double sharePreferred(const Life& l, uint32_t from, uint32_t to, uint8_t i, uint
   return total ? double(n) / total : 0;
 }
 
+// ---- PE-1 personality metrics ----
+
+// Traits that receive evidence in PE-1d; the others stay innate (O1 default).
+const TraitId kLearnable[] = {TraitId::Curiosity, TraitId::Sociability, TraitId::Playfulness,
+                              TraitId::Tempo};
+
+double unit(int32_t q14) { return q14 / 16384.0; }
+
+// Mean |Δ effective trait| over the learnable traits, in trait units (1.0).
+double traitGap(const Day& a, const Day& b) {
+  double sum = 0;
+  for (TraitId t : kLearnable) {
+    const int32_t d = int32_t(a.trait[uint8_t(t)]) - b.trait[uint8_t(t)];
+    sum += unit(d < 0 ? -d : d);
+  }
+  return sum / 4;
+}
+
+// The first three learnable traits move only with owner reactions; tempo
+// follows the owner's session density, which is the same schedule in every
+// scenario here, so it is reported apart.
+constexpr uint8_t kReactionTraits = 3;
+
+// Mean |learned offset| over the first `count` learnable traits, end of life.
+double learnedAbs(const Life& l, uint8_t count) {
+  double sum = 0;
+  for (uint8_t k = 0; k < count; ++k) {
+    const int16_t o = l.genome.offset[uint8_t(kLearnable[k])];
+    sum += unit(o < 0 ? -o : o);
+  }
+  return sum / count;
+}
+double learnedAbs(const Life& l) { return learnedAbs(l, 4); }
+double learnedAbsReaction(const Life& l) { return learnedAbs(l, kReactionTraits); }
+
+double meanOffset(const Life* lives, uint32_t n, TraitId t) {
+  double sum = 0;
+  for (uint32_t k = 0; k < n; ++k) sum += unit(lives[k].genome.offset[uint8_t(t)]);
+  return sum / n;
+}
+
+// Mean over the first `count` learnable traits of (max − min) across days.
+double traitSwing(const Life& l, uint32_t from, uint32_t to, uint8_t count = 4) {
+  double sum = 0;
+  for (uint8_t k = 0; k < count; ++k) {
+    int16_t lo = 32767, hi = -32768;
+    for (uint32_t d = from; d <= to; ++d) {
+      const int16_t v = l.day[d].trait[uint8_t(kLearnable[k])];
+      if (v < lo) lo = v;
+      if (v > hi) hi = v;
+    }
+    sum += unit(hi - lo);
+  }
+  return sum / count;
+}
+
+// Shadow variety: mean per-cell entropy (bits) and top-action share.
+double shadowEntropy(const Life* lives, uint32_t n, double& top) {
+  double entropy = 0;
+  uint32_t sampled = 0;
+  top = 0;
+  for (uint32_t k = 0; k < n; ++k)
+    for (uint8_t i : kCompared)
+      for (uint8_t p = 0; p < kParts; ++p) {
+        double x[kActions];
+        if (cell(lives[k], kWeekFrom, kWeekTo, i, p, x, true) < 10) continue;
+        double h = 0, best = 0;
+        for (uint8_t a = 0; a < kActions; ++a) {
+          if (x[a] > 0) h -= x[a] * std::log2(x[a]);
+          if (x[a] > best) best = x[a];
+        }
+        entropy += h;
+        top += best;
+        ++sampled;
+      }
+  if (sampled) top /= sampled;
+  return sampled ? entropy / sampled : -1;
+}
+
+// Share of sampled cells whose most frequent shadow action is the learner's
+// greedy choice at the end: the genome does not overrule what was learned.
+double shadowFollowsLearner(const Life* lives, uint32_t n) {
+  uint32_t hits = 0, cells = 0;
+  for (uint32_t k = 0; k < n; ++k)
+    for (uint8_t i : kCompared)
+      for (uint8_t p = 0; p < kParts; ++p) {
+        double x[kActions];
+        if (cell(lives[k], kWeekFrom, kWeekTo, i, p, x, true) < 10) continue;
+        uint8_t best = 0;
+        for (uint8_t a = 1; a < kActions; ++a)
+          if (x[a] > x[best]) best = a;
+        hits += best == lives[k].day[kWeekTo].greedy[i][p];
+        ++cells;
+      }
+  return cells ? double(hits) / cells : -1;
+}
+
+double moodMean(const Life& l, uint32_t from, uint32_t to) {
+  int64_t sum = 0;
+  uint32_t n = 0;
+  for (uint32_t d = from; d <= to; ++d) {
+    sum += l.day[d].moodSum;
+    n += l.day[d].moodSamples;
+  }
+  return n ? unit(int32_t(sum / n)) : 0;
+}
+
+double moodLow(const Life& l, uint32_t from, uint32_t to) {
+  int16_t low = 32767;
+  for (uint32_t d = from; d <= to; ++d)
+    if (l.day[d].moodMin < low) low = l.day[d].moodMin;
+  return unit(low);
+}
+
+double meanOverLives(const Life* lives, uint32_t n, double (*f)(const Life&)) {
+  double sum = 0;
+  for (uint32_t k = 0; k < n; ++k) sum += f(lives[k]);
+  return sum / n;
+}
+
 // ---- reporting ----
 
 constexpr uint32_t kSeeds = 5;
@@ -302,12 +484,14 @@ bool liveAll(const Run* runs, uint32_t n, Life* lives) {
   return true;
 }
 
+void pe1(const char* scenario, const char* name, double value, const char* note = "") {
+  std::printf("pe1,%s,%s,%.4f,%s\n", scenario, name, value, note);
+}
+
 void metric(const char* scenario, const char* name, double value, const char* note = "") {
   std::printf("metric,%s,%s,%.4f,%s\n", scenario, name, value, note);
 }
 
-// Last week of a 30-day life: local days 23–29.
-constexpr uint32_t kWeekFrom = 23, kWeekTo = 29;
 
 bool ownersVersusSeeds() {
   static Life lives[3][kSeeds];
@@ -395,6 +579,50 @@ bool ownersVersusSeeds() {
   const uint32_t n = 3 * kSeeds - never;
   metric("owners", "first_day_75pct_cells_follow_owner", n ? learned / n : -1, "Oracle, mean over runs that got there");
   metric("owners", "runs_never_75pct", never, "of 15");
+
+  // PE-1 shadow: genome, ledger, drives and affect beside the same lives.
+  double gapBetween = 0, gapWithin = 0, jsBetween = 0, jsWithin = 0;
+  for (uint32_t s = 0; s < kSeeds; ++s)
+    for (uint8_t a = 0; a < 3; ++a)
+      for (uint8_t b = a + 1; b < 3; ++b) {
+        gapBetween += traitGap(lives[a][s].day[kWeekTo], lives[b][s].day[kWeekTo]);
+        jsBetween += distance(lives[a][s], kWeekFrom, kWeekTo, lives[b][s], kWeekFrom, kWeekTo, 10, true).value;
+      }
+  for (uint8_t profile = 0; profile < 3; ++profile)
+    for (uint32_t a = 0; a < kSeeds; ++a)
+      for (uint32_t b = a + 1; b < kSeeds; ++b) {
+        gapWithin += traitGap(lives[profile][a].day[kWeekTo], lives[profile][b].day[kWeekTo]);
+        jsWithin += distance(lives[profile][a], kWeekFrom, kWeekTo, lives[profile][b], kWeekFrom,
+                             kWeekTo, 10, true).value;
+      }
+  gapBetween /= nb;
+  gapWithin /= nw;
+  pe1("owners", "trait_gap_between_owners", gapBetween, "same seed, different owner; learnable traits, day 29");
+  pe1("owners", "trait_gap_within_owner", gapWithin, "same owner, different seed (innate + learned)");
+  pe1("owners", "trait_ratio_between_over_within", gapWithin > 0 ? gapBetween / gapWithin : 0,
+      "plan 5 row 1 at trait level: >= 3");
+  pe1("owners", "shadow_js_between_owners", jsBetween / nb);
+  pe1("owners", "shadow_js_within_owner", jsWithin / nw, "visible individuality under one owner");
+  const char* traitNames[] = {"curiosity", "sociability", "playfulness", "tempo"};
+  for (uint8_t profile = 0; profile < 3; ++profile)
+    for (uint8_t k = 0; k < 4; ++k) {
+      char name[48];
+      std::snprintf(name, sizeof(name), "p%u_offset_%s", profile, traitNames[k]);
+      pe1("owners", name, meanOffset(lives[profile], kSeeds, kLearnable[k]), "learned, day 29, mean of 5");
+    }
+  double shadowTop = 0;
+  pe1("owners", "shadow_entropy_bits", shadowEntropy(&lives[0][0], 3 * kSeeds, shadowTop), "learner alone: 0.091");
+  pe1("owners", "shadow_top_action_share", shadowTop, "learner alone: 0.976");
+  pe1("owners", "shadow_top_is_learner_greedy", shadowFollowsLearner(&lives[0][0], 3 * kSeeds),
+      "trait does not overrule learning");
+  double shifts = 0, mood = 0;
+  for (uint8_t profile = 0; profile < 3; ++profile)
+    for (uint32_t s = 0; s < kSeeds; ++s) {
+      shifts += lives[profile][s].shifts;
+      mood += moodMean(lives[profile][s], kWeekFrom, kWeekTo);
+    }
+  pe1("owners", "shifts_per_run", shifts / (3 * kSeeds), "consolidations that moved a trait in 30 days");
+  pe1("owners", "mood_mean_last_week", mood / (3 * kSeeds));
   return true;
 }
 
@@ -410,12 +638,39 @@ bool entropyOnly() {
   for (uint32_t s = 1; s < kSeeds; ++s) {
     bool same = true;
     for (uint32_t d = 0; d < g_lives[0].days; ++d)
-      same = same && std::memcmp(&g_lives[0].day[d], &g_lives[s].day[d], sizeof(Day)) == 0;
+      same = same && sameLearnerDay(g_lives[0].day[d], g_lives[s].day[d]);
     identical += same;
     sum += distance(g_lives[0], kWeekFrom, kWeekTo, g_lives[s], kWeekFrom, kWeekTo, 10).value;
   }
   metric("entropy_only", "lives_identical_to_seed1", identical, "of 4: same owner draws, only the PetId entropy differs");
   metric("entropy_only", "js_mean", sum / (kSeeds - 1));
+  double gap = 0, shadowJs = 0;
+  for (uint32_t s = 1; s < kSeeds; ++s) {
+    gap += traitGap(g_lives[0].day[kWeekTo], g_lives[s].day[kWeekTo]);
+    shadowJs += distance(g_lives[0], kWeekFrom, kWeekTo, g_lives[s], kWeekFrom, kWeekTo, 10, true).value;
+  }
+  pe1("entropy_only", "trait_gap", gap / (kSeeds - 1), "learnable traits, day 29");
+  pe1("entropy_only", "shadow_js", shadowJs / (kSeeds - 1),
+      "same owner draws, different IdentityRecord.seed; proposed G1 >= 0.1 (learner alone: 0)");
+  // Expression channels that do not touch the choice (PE-2 candidates):
+  // spread (max − min) across the five pets.
+  double lo[4] = {1e9, 1e9, 1e9, 1e9}, hi[4] = {-1e9, -1e9, -1e9, -1e9};
+  for (uint32_t s = 0; s < kSeeds; ++s) {
+    const Life& l = g_lives[s];
+    const double v[4] = {
+        15.0 * unit(l.day[kWeekTo].trait[uint8_t(TraitId::Tempo)]),  // frame speed ±15 % [P]
+        unit(Affect::parametersFor(l.genome).gain),                  // emotion size
+        double(Drives::ratesFor(l.genome).explore),                  // explore rise / min
+        moodMean(l, kWeekFrom, kWeekTo)};
+    for (uint8_t k = 0; k < 4; ++k) {
+      if (v[k] < lo[k]) lo[k] = v[k];
+      if (v[k] > hi[k]) hi[k] = v[k];
+    }
+  }
+  pe1("entropy_only", "spread_frame_speed_pct", hi[0] - lo[0], "tempo x 15 %, day 29");
+  pe1("entropy_only", "spread_emotion_gain", hi[1] - lo[1], "neutral 0.5");
+  pe1("entropy_only", "spread_explore_rate_pct", 100.0 * (hi[2] - lo[2]) / 512, "of the neutral rate");
+  pe1("entropy_only", "spread_mood_mean", hi[3] - lo[3], "last week");
   return true;
 }
 
@@ -439,6 +694,15 @@ bool absence() {
   metric("absence", "js_week2_vs_week5", js1 / kSeeds,
          "no reboot: the clock keeps its day parts after the last sync, so the fine cells stay in use");
   metric("absence", "cells_compared", cells / kSeeds, "greeting cells drop out: nobody presses GPIO0");
+  double gap = 0, mood = 0, low = 0;
+  for (uint32_t s = 0; s < kSeeds; ++s) {
+    gap += traitGap(g_lives[s].day[13], g_lives[s].day[29]);
+    mood += moodMean(g_lives[s], 23, 29) - unit(Affect::parametersFor(g_lives[s].genome).prevalence);
+    low += moodLow(g_lives[s], 15, 29);
+  }
+  pe1("absence", "trait_change_days_13_to_29", gap / kSeeds, "plan 5: 0");
+  pe1("absence", "mood_minus_baseline_last_week", mood / kSeeds, "no sadness from absence: ~0");
+  pe1("absence", "mood_low_days_15_29", low / kSeeds);
   return true;
 }
 
@@ -456,6 +720,16 @@ bool driftOwners(OwnerKind kind, const char* name) {
   metric(name, "js_week1_vs_week4", weeks / kSeeds);
   metric(name, "cells_following_profile_day29", followed / kSeeds,
          kind == OwnerKind::Random ? "no real preference: chance level only" : "");
+  double swing = 0, shifts = 0;
+  for (uint32_t s = 0; s < kSeeds; ++s) {
+    swing += traitSwing(g_lives[s], 8, 29, kReactionTraits);
+    shifts += g_lives[s].shifts;
+  }
+  pe1(name, "reaction_learned_abs", meanOverLives(g_lives, kSeeds, learnedAbsReaction),
+      "mean |offset| of curiosity, sociability, playfulness, day 29");
+  pe1(name, "reaction_trait_swing_days_8_29", swing / kSeeds);
+  pe1(name, "tempo_offset", meanOffset(g_lives, kSeeds, TraitId::Tempo), "session density, same schedule as every owner");
+  pe1(name, "shifts_per_run", shifts / kSeeds);
   return true;
 }
 
@@ -471,6 +745,15 @@ bool silent() {
   }
   metric("silent", "learner_equal_to_boot_day29", same, "of 5");
   metric("silent", "js_week1_vs_week4", weeks / kSeeds);
+  double reactionTraits = 0;
+  for (uint32_t s = 0; s < kSeeds; ++s)
+    for (uint8_t k = 0; k < 3; ++k) {  // curiosity, sociability, playfulness
+      const int16_t o = g_lives[s].genome.offset[uint8_t(kLearnable[k])];
+      reactionTraits += unit(o < 0 ? -o : o);
+    }
+  pe1("silent", "reaction_traits_abs_offset", reactionTraits / (3 * kSeeds), "plan 5: 0 (no reactions)");
+  pe1("silent", "tempo_offset", meanOffset(g_lives, kSeeds, TraitId::Tempo),
+      "session density is real owner behaviour (device observed)");
   return true;
 }
 
@@ -498,6 +781,19 @@ bool badDay() {
   metric("bad_day", "js_week_before_vs_day_after", shift / kSeeds);
   metric("bad_day", "days_to_recover", n ? recovery / n : -1, "back to day-19 match share");
   metric("bad_day", "runs_never_recovered", never, "of 5");
+  double gap21 = 0, low = 0, before = 0, after = 0, normal = 0;
+  for (uint32_t s = 0; s < kSeeds; ++s) {
+    gap21 += traitGap(g_lives[s].day[19], g_lives[s].day[21]);
+    low += moodLow(g_lives[s], 20, 20);
+    normal += moodLow(g_lives[s], 13, 19);
+    before += moodMean(g_lives[s], 13, 19);
+    after += moodMean(g_lives[s], 22, 29);
+  }
+  pe1("bad_day", "trait_change_day19_to_day21", gap21 / kSeeds, "plan 5: 0");
+  pe1("bad_day", "mood_low_on_bad_day", low / kSeeds, "floor -0.5");
+  pe1("bad_day", "mood_low_normal_week", normal / kSeeds);
+  pe1("bad_day", "mood_mean_week_before", before / kSeeds);
+  pe1("bad_day", "mood_mean_days_22_29", after / kSeeds, "recovered");
   return true;
 }
 
@@ -522,6 +818,10 @@ bool alternating() {
   }
   metric("alternating", "greedy_flips_per_day", flips / kSeeds, "owner swaps P1/P0 every 2 days, days 10-29");
   metric("alternating", "js_between_2day_blocks", swing / kSeeds, "oscillation amplitude");
+  double traitSwings = 0;
+  for (uint32_t s = 0; s < kSeeds; ++s) traitSwings += traitSwing(g_lives[s], 10, 29, kReactionTraits);
+  pe1("alternating", "reaction_trait_swing_days_10_29", traitSwings / kSeeds, "plan 5: ~0");
+  pe1("alternating", "learned_abs", meanOverLives(g_lives, kSeeds, learnedAbs));
   return true;
 }
 
@@ -551,6 +851,19 @@ bool reversal() {
   metric("reversal", "runs_never_75pct", never, "of 5");
   metric("reversal", "days_until_half_of_quiet_choices_new", kSeeds - neverHalf ? half / (kSeeds - neverHalf) : -1);
   metric("reversal", "runs_never_half", neverHalf, "of 5");
+  // Curiosity was rewarded for 15 days (P1 likes curious), then happy is.
+  double gained = 0, afterwards = 0, play = 0;
+  for (uint32_t s = 0; s < kSeeds; ++s) {
+    const Life& l = g_lives[s];
+    const uint8_t c = uint8_t(TraitId::Curiosity), p = uint8_t(TraitId::Playfulness);
+    gained += unit(l.day[14].trait[c] - l.day[0].trait[c]);
+    afterwards += unit(l.day[29].trait[c] - l.day[14].trait[c]);
+    play += unit(l.day[29].trait[p] - l.day[14].trait[p]);
+  }
+  pe1("reversal", "curiosity_gain_days_0_14", gained / kSeeds);
+  pe1("reversal", "curiosity_change_days_14_29", afterwards / kSeeds,
+      "learning reversed in 3.6 days; personality should lag far behind");
+  pe1("reversal", "playfulness_change_days_14_29", play / kSeeds);
   return true;
 }
 
@@ -570,6 +883,105 @@ bool learningSpeed(OwnerKind kind, const char* name) {
   metric(name, "first_day_75pct_cells_follow_owner", kSeeds - never ? first / (kSeeds - never) : -1);
   metric(name, "runs_never_75pct", never, "of 5");
   metric(name, "cells_following_owner_day29", final / kSeeds);
+  double evidence = 0, shifts = 0;
+  for (uint32_t s = 0; s < kSeeds; ++s) {
+    evidence += g_lives[s].evidence;
+    shifts += g_lives[s].shifts;
+  }
+  pe1(name, "learned_abs", meanOverLives(g_lives, kSeeds, learnedAbs));
+  pe1(name, "curiosity_offset", meanOffset(g_lives, kSeeds, TraitId::Curiosity));
+  pe1(name, "evidence_per_run", evidence / kSeeds);
+  pe1(name, "shifts_per_run", shifts / kSeeds);
+  return true;
+}
+
+// 90-day lives: does the owner's effect on traits overtake the innate one?
+bool longOwners() {
+  static Life lives[3][kSeeds];
+  for (uint8_t profile = 0; profile < 3; ++profile)
+    for (uint32_t s = 0; s < kSeeds; ++s) {
+      Run r = run("long_owners", owner(OwnerKind::Oracle, profile), s + 1);
+      r.days = 90;
+      if (!live(r, lives[profile][s])) return false;
+    }
+  const uint32_t days[] = {29, 59, 89};
+  for (uint32_t d : days) {
+    double between = 0, within = 0;
+    uint32_t nb = 0, nw = 0;
+    for (uint32_t s = 0; s < kSeeds; ++s)
+      for (uint8_t a = 0; a < 3; ++a)
+        for (uint8_t b = a + 1; b < 3; ++b, ++nb)
+          between += traitGap(lives[a][s].day[d], lives[b][s].day[d]);
+    for (uint8_t profile = 0; profile < 3; ++profile)
+      for (uint32_t a = 0; a < kSeeds; ++a)
+        for (uint32_t b = a + 1; b < kSeeds; ++b, ++nw)
+          within += traitGap(lives[profile][a].day[d], lives[profile][b].day[d]);
+    char name[48];
+    std::snprintf(name, sizeof(name), "trait_ratio_day%u", d);
+    pe1("long_owners", name, (between / nb) / (within / nw), "between owners / within owner; plan >= 3");
+    std::snprintf(name, sizeof(name), "trait_gap_between_day%u", d);
+    pe1("long_owners", name, between / nb);
+    std::snprintf(name, sizeof(name), "trait_gap_within_day%u", d);
+    pe1("long_owners", name, within / nw);
+  }
+  pe1("long_owners", "p1_curiosity_day89", meanOffset(lives[1], kSeeds, TraitId::Curiosity));
+  pe1("long_owners", "p2_playfulness_day89", meanOffset(lives[2], kSeeds, TraitId::Playfulness));
+  pe1("long_owners", "p0_sociability_day89", meanOffset(lives[0], kSeeds, TraitId::Sociability));
+  return true;
+}
+
+// Ledger thresholds: signal from a consistent owner vs drift from noise.
+bool sweepLedger() {
+  const uint8_t sessions[] = {3, 4, 5};
+  const int32_t coherence[] = {8192, 9830, 12288};  // 0.5, 0.6, 0.75
+  std::printf("# sweep,<min sessions>,<coherence>,<random reaction learned_abs>,<random reaction swing>,"
+              "<p1 curiosity>,<p1 sociability>,<p1 learned_abs>,<alternating swing>\n");
+  for (uint8_t ms : sessions)
+    for (int32_t co : coherence) {
+      double random = 0, randomSwing = 0, curiosity = 0, sociability = 0, p1 = 0, alt = 0;
+      for (uint32_t s = 0; s < kSeeds; ++s) {
+        Run r = run("sweep", owner(OwnerKind::Random, 1), s + 1);
+        r.shadow.ledger.minSessions = ms;
+        r.shadow.ledger.coherenceQ14 = co;
+        if (!live(r, g_lives[0])) return false;
+        random += learnedAbsReaction(g_lives[0]);
+        randomSwing += traitSwing(g_lives[0], 8, 29, kReactionTraits);
+        r.owner = owner(OwnerKind::Oracle, 1);
+        if (!live(r, g_lives[0])) return false;
+        curiosity += unit(g_lives[0].genome.offset[uint8_t(TraitId::Curiosity)]);
+        sociability += unit(g_lives[0].genome.offset[uint8_t(TraitId::Sociability)]);
+        p1 += learnedAbs(g_lives[0]);
+        r.owner = owner(OwnerKind::Alternating, 1, 0);
+        r.owner.period = 2;
+        if (!live(r, g_lives[0])) return false;
+        alt += traitSwing(g_lives[0], 10, 29, kReactionTraits);
+      }
+      std::printf("sweep,%u,%.2f,%.4f,%.4f,%.4f,%.4f,%.4f,%.4f\n", ms, co / 16384.0, random / kSeeds,
+                  randomSwing / kSeeds, curiosity / kSeeds, sociability / kSeeds, p1 / kSeeds,
+                  alt / kSeeds);
+    }
+  return true;
+}
+
+// Drive weight in the shadow choice: variety and individuality vs learning.
+bool sweepDrives() {
+  const uint16_t weights[] = {0, 8192, 16384, 32768};
+  std::printf("# drives,<weight>,<shadow entropy>,<top share>,<top is learner greedy>,"
+              "<same-owner shadow js>\n");
+  for (uint16_t w : weights) {
+    for (uint32_t s = 0; s < kSeeds; ++s) {
+      Run r = run("drives", owner(OwnerKind::Oracle, 1), 1);
+      r.entropySeed = s + 1;  // same owner draws, different pets
+      r.shadow.driveWeightQ16 = w;
+      if (!live(r, g_lives[s])) return false;
+    }
+    double top = 0, js = 0;
+    const double entropy = shadowEntropy(g_lives, kSeeds, top);
+    for (uint32_t s = 1; s < kSeeds; ++s)
+      js += distance(g_lives[0], kWeekFrom, kWeekTo, g_lives[s], kWeekFrom, kWeekTo, 10, true).value;
+    std::printf("drives,%.3f,%.4f,%.4f,%.4f,%.4f\n", w / 65536.0, entropy, top,
+                shadowFollowsLearner(g_lives, kSeeds), js / (kSeeds - 1));
+  }
   return true;
 }
 
@@ -580,6 +992,7 @@ int main() {
   std::printf("# PE-0 baseline. run,<scenario>,<owner kind>,<owner seed>,<entropy seed>,"
               "<decisions>,<pets>,<shoos>,<day-29 greedy quiet p0-4 greeting p0-4>,<learner fingerprint>\n");
   std::printf("# metric,<scenario>,<name>,<value>,<note>\n");
+  std::printf("# pe1,<scenario>,<name>,<value>,<note>   PE-1 shadow beside the same lives\n");
   bool ok = ownersVersusSeeds();
   ok = ok && entropyOnly();
   ok = ok && absence();
@@ -591,6 +1004,9 @@ int main() {
   ok = ok && reversal();
   ok = ok && learningSpeed(OwnerKind::Sparse, "sparse");
   ok = ok && learningSpeed(OwnerKind::Teacher, "teacher");
+  ok = ok && longOwners();
+  ok = ok && sweepLedger();
+  ok = ok && sweepDrives();
   const std::chrono::duration<double> spent = std::chrono::steady_clock::now() - start;
   std::fprintf(stderr, "runtime_s=%.1f\n", spent.count());
   return ok ? 0 : 1;

@@ -1,5 +1,6 @@
 #include <unity.h>
 
+#include <xuna/lab/PersonalityShadow.h>
 #include <xuna/personality/EvidenceLedger.h>
 #include <xuna/personality/Temperament.h>
 
@@ -17,6 +18,30 @@ void reactions(EvidenceLedger& ledger, TraitId trait, int16_t value, uint32_t se
     ledger.observe(trait, value, EvidenceSource::OwnerReaction,
                    value > 0 ? EvidenceReason::ExploreRewarded : EvidenceReason::ExploreShooed,
                    session);
+}
+
+const uint32_t kMinute = 60000;
+
+LifeCoreStepOutput shownOutput(ActionId action, LearnInteraction context) {
+  LifeCoreStepOutput out;
+  out.activity = Activity::Idle;
+  out.decisionShown = true;
+  out.selectedAction = static_cast<uint8_t>(action);
+  out.decisionContext = static_cast<uint8_t>(context);
+  return out;
+}
+
+// One owner session at `start`: `count` pets of XUNA's `action`, then the
+// owner leaves and the session closes after the 30-minute gap.
+void session(PersonalityShadow& shadow, const PreferenceLearnerV3& learner, uint32_t start,
+             ActionId action, LearnInteraction context, bool pet, uint32_t count = 4) {
+  const LifeCoreStepOutput out = shownOutput(action, context);
+  for (uint32_t i = 0; i < count; ++i) {
+    shadow.shown(out, learner);
+    shadow.ownerInput(start + i * 1000);
+    shadow.reaction(pet);
+  }
+  shadow.step(start + 31 * kMinute, out);
 }
 
 }  // namespace
@@ -245,6 +270,92 @@ void golden_history() {
   TEST_ASSERT_EQUAL_INT16(492, l.journal(3).delta);
 }
 
+void shadow_needs_the_owner_not_its_own_actions() {
+  PreferenceLearnerV3 learner(productLearnerConfig());
+  PersonalityShadow shadow(0x5eed1234U);
+  shadow.begin(0);
+  const LifeCoreStepOutput out = shownOutput(ActionId::Curious, LearnInteraction::QuietRequest);
+  for (uint32_t m = 1; m <= 3 * 1440; ++m) {  // three days of XUNA acting alone
+    shadow.shown(out, learner);
+    shadow.noteShadowAction(2);
+    shadow.reaction(true);  // no owner session: ignored
+    shadow.step(m * kMinute, out);
+  }
+  TEST_ASSERT_EQUAL_UINT32(0, shadow.evidence());
+  TEST_ASSERT_EQUAL_UINT32(0, shadow.sessions());
+  for (uint8_t i = 0; i < kTraitCount; ++i) TEST_ASSERT_EQUAL_INT16(0, shadow.genome().offset[i]);
+}
+
+void shadow_turns_reactions_into_evidence_and_consolidates_per_session() {
+  PreferenceLearnerV3 learner(productLearnerConfig());  // p̂ = 0.5 everywhere
+  PersonalityShadow shadow(0x5eed1234U);
+  shadow.begin(0);
+  for (uint32_t k = 0; k < 3; ++k)
+    session(shadow, learner, (k + 1) * 120 * kMinute, ActionId::Curious,
+            LearnInteraction::QuietRequest, true);
+  // e = 1 − 0.5 per pet, × 0.3, four per session capped at 0.5: three
+  // sessions reach 1.5 and the trait moves one full step at the third end.
+  TEST_ASSERT_EQUAL_UINT32(3, shadow.sessions());
+  TEST_ASSERT_EQUAL_UINT32(12, shadow.evidence());
+  TEST_ASSERT_EQUAL_UINT32(1, shadow.shifts());
+  TEST_ASSERT_EQUAL_INT16(EvidenceLedger::kMaxStep,
+                          shadow.genome().offset[uint8_t(TraitId::Curiosity)]);
+  TEST_ASSERT_EQUAL_UINT8(uint8_t(EvidenceReason::ExploreRewarded), shadow.ledger().journal(0).reason);
+  TEST_ASSERT_TRUE(shadow.affect().state().moodValence > 0);
+
+  // Greeting answers feed sociability; a shooed happy choice, playfulness.
+  PersonalityShadow other(7);
+  other.begin(0);
+  session(other, learner, 120 * kMinute, ActionId::Happy, LearnInteraction::ButtonGreeting, true);
+  session(other, learner, 240 * kMinute, ActionId::Happy, LearnInteraction::QuietRequest, false);
+  TEST_ASSERT_TRUE(other.ledger().trait(TraitId::Sociability).pending > 0);
+  TEST_ASSERT_TRUE(other.ledger().trait(TraitId::Playfulness).pending < 0);
+  TEST_ASSERT_EQUAL_INT32(0, other.ledger().trait(TraitId::Curiosity).importance);
+}
+
+void shadow_absence_changes_nothing() {
+  PreferenceLearnerV3 learner(productLearnerConfig());
+  PersonalityShadow shadow(42);
+  shadow.begin(0);
+  const LifeCoreStepOutput out = shownOutput(ActionId::Idle, LearnInteraction::QuietRequest);
+  shadow.ownerInput(1000);
+  for (uint32_t day = 1; day <= 40; ++day) shadow.step(day * 1440 * kMinute, out);
+  TEST_ASSERT_EQUAL_UINT32(1, shadow.sessions());
+  for (uint8_t i = 0; i < kTraitCount; ++i) TEST_ASSERT_EQUAL_INT16(0, shadow.genome().offset[i]);
+  const int16_t baseline = Affect::parametersFor(shadow.genome()).prevalence;
+  const int16_t mood = shadow.affect().state().moodValence;
+  TEST_ASSERT_TRUE(mood - baseline <= 64 && baseline - mood <= 64);
+  TEST_ASSERT_EQUAL_UINT16(0, shadow.drives().state().social);
+}
+
+void shadow_choice_never_overrules_a_learned_preference() {
+  PreferenceLearnerV3 learner(productLearnerConfig());
+  for (uint32_t i = 0; i < 6; ++i) {  // the owner taught: idle yes, curious and happy no
+    V3Decision d;
+    d.interaction = 0;
+    d.id = 3 * i + 1;
+    d.action = 0;
+    learner.feedback(d, true);
+    d.id = 3 * i + 2;
+    d.action = 1;
+    learner.feedback(d, false);
+    d.id = 3 * i + 3;
+    d.action = 2;
+    learner.feedback(d, false);
+  }
+  PersonalityShadow shadow(1);
+  shadow.begin(0);
+  PreferenceLearnerV3 fresh(productLearnerConfig());
+  const LifeCoreStepOutput out = shownOutput(ActionId::Idle, LearnInteraction::QuietRequest);
+  shadow.step(100 * kMinute, out);  // explore has risen faster than play
+  TEST_ASSERT_TRUE(shadow.drives().state().explore > shadow.drives().state().play);
+  TEST_ASSERT_EQUAL_UINT8(2, shadow.choose(0, 0, fresh));  // nothing learned: drives decide
+  TEST_ASSERT_EQUAL_UINT8(0, shadow.choose(0, 0, learner));
+  shadow.step(12 * 60 * kMinute, out);  // every drive full: still what the owner taught
+  TEST_ASSERT_TRUE(shadow.drives().state().explore > 60000);
+  TEST_ASSERT_EQUAL_UINT8(0, shadow.choose(0, 0, learner));
+}
+
 void setUp() {}
 void tearDown() {}
 int main() {
@@ -260,5 +371,9 @@ int main() {
   RUN_TEST(weak_device_evidence_needs_many_sessions);
   RUN_TEST(journal_keeps_the_latest_four_and_forget_clears);
   RUN_TEST(golden_history);
+  RUN_TEST(shadow_needs_the_owner_not_its_own_actions);
+  RUN_TEST(shadow_turns_reactions_into_evidence_and_consolidates_per_session);
+  RUN_TEST(shadow_absence_changes_nothing);
+  RUN_TEST(shadow_choice_never_overrules_a_learned_preference);
   return UNITY_END();
 }
