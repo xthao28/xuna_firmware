@@ -51,6 +51,7 @@ int main(int argc, char** argv) {
   m.arrivalHour = 19;
   m.arrivalMinute = 10;
   std::strcpy(m.shortId, "d945c770");
+  m.mood = xuna::MoodWord::Bored;  // the widest mood word
   xuna::renderStatusCard(canvas, fonts, m);
   if (!writePpm(dir + "/status_card.ppm")) return 1;
 

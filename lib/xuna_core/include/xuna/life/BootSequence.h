@@ -104,6 +104,7 @@ class BootSequence {
       if (r.lifeReady) core.restore(scratch);
     }
     r.identityReady = identity.state() == IdentityState::Ready;
+    core.seedPersonality(r.identityReady ? identity.record().seed : 0);
     core.snapshot().counters.bootCounter = r.boot;
     core.begin(now, r.lifeReady);
     return r;

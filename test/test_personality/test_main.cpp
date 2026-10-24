@@ -131,7 +131,7 @@ void one_extreme_session_never_moves_a_trait() {
   TEST_ASSERT_EQUAL_INT32(EvidenceLedger::kMaxSessionShare, l.importance);
   for (uint32_t i = 0; i < 5; ++i) TEST_ASSERT_EQUAL_UINT8(0, ledger.consolidate(s).shifted);
   TEST_ASSERT_EQUAL_INT16(0, s.offset[0]);
-  // Two strong sessions are still not enough (≥ 3 sessions).
+  // Two strong sessions are still not enough (≥ 4 sessions, G1-a).
   reactions(ledger, TraitId::Curiosity, kDown, 2, 1000);
   TEST_ASSERT_EQUAL_UINT8(0, ledger.consolidate(s).shifted);
   TEST_ASSERT_EQUAL_INT16(0, s.offset[0]);
@@ -144,11 +144,15 @@ void bad_day_then_good_session_does_not_shift() {
   reactions(ledger, TraitId::Curiosity, kDown, 1);
   reactions(ledger, TraitId::Curiosity, kDown, 2);
   reactions(ledger, TraitId::Curiosity, kUp, 3);
-  const ConsolidationReport r = ledger.consolidate(s);
+  ConsolidationReport r = ledger.consolidate(s);  // 3 sessions: too few to judge
+  TEST_ASSERT_EQUAL_UINT8(0, r.shifted);
+  TEST_ASSERT_EQUAL_UINT8(0, r.decayed);
+  reactions(ledger, TraitId::Curiosity, kUp, 4);
+  r = ledger.consolidate(s);
   TEST_ASSERT_EQUAL_UINT8(0, r.shifted);
   TEST_ASSERT_EQUAL_UINT8(1, r.decayed);
   TEST_ASSERT_EQUAL_INT16(0, s.offset[0]);
-  TEST_ASSERT_EQUAL_INT32(-8192 / 5, ledger.trait(TraitId::Curiosity).pending);
+  TEST_ASSERT_EQUAL_INT32(0, ledger.trait(TraitId::Curiosity).pending);
   TEST_ASSERT_EQUAL_UINT8(0, ledger.trait(TraitId::Curiosity).sessions);
 }
 
@@ -160,6 +164,8 @@ void consistent_sessions_move_one_bounded_step_with_a_reason() {
   reactions(ledger, TraitId::Curiosity, kUp, 11);
   TEST_ASSERT_EQUAL_UINT8(0, ledger.consolidate(s).shifted);
   reactions(ledger, TraitId::Curiosity, kUp, 12);
+  TEST_ASSERT_EQUAL_UINT8(0, ledger.consolidate(s).shifted);
+  reactions(ledger, TraitId::Curiosity, kUp, 13);
   TEST_ASSERT_EQUAL_UINT8(1, ledger.consolidate(s).shifted);
   TEST_ASSERT_EQUAL_INT16(EvidenceLedger::kMaxStep, s.offset[0]);
   for (uint8_t i = 1; i < kTraitCount; ++i) TEST_ASSERT_EQUAL_INT16(0, s.offset[i]);
@@ -168,7 +174,7 @@ void consistent_sessions_move_one_bounded_step_with_a_reason() {
   TEST_ASSERT_EQUAL_UINT8(uint8_t(TraitId::Curiosity), e.trait);
   TEST_ASSERT_EQUAL_UINT8(uint8_t(EvidenceReason::ExploreRewarded), e.reason);
   TEST_ASSERT_EQUAL_UINT8(uint8_t(EvidenceSource::OwnerReaction), e.source);
-  TEST_ASSERT_EQUAL_UINT8(3, e.sessions);
+  TEST_ASSERT_EQUAL_UINT8(4, e.sessions);
   TEST_ASSERT_EQUAL_INT16(EvidenceLedger::kMaxStep, e.delta);
   // The trait's ledger restarts from nothing.
   TEST_ASSERT_EQUAL_INT32(0, ledger.trait(TraitId::Curiosity).importance);
@@ -198,7 +204,7 @@ void steps_are_rate_limited_and_saturate() {
     TEST_ASSERT_TRUE(step >= 0 && step <= EvidenceLedger::kMaxStep);
   }
   TEST_ASSERT_EQUAL_INT16(-kOffsetRange, s.offset[uint8_t(TraitId::Tempo)]);
-  // 0.6 / 0.03 = 20 steps of 3 sessions each: weeks, not a day.
+  // 0.6 / 0.03 = 20 steps of 4 sessions each: weeks, not a day.
   TEST_ASSERT_TRUE(shifts >= 20);
   TEST_ASSERT_EQUAL_INT16(-(kOffsetRange - 19 * EvidenceLedger::kMaxStep), ledger.journal(0).delta);
   TEST_ASSERT_EQUAL_UINT16(20, ledger.journal(0).sequence);  // limit hit: no more entries
@@ -227,7 +233,7 @@ void journal_keeps_the_latest_four_and_forget_clears() {
   TemperamentState s;
   uint32_t session = 0;
   for (uint8_t trait = 0; trait < 6; ++trait)
-    for (uint8_t k = 0; k < 3; ++k) {
+    for (uint8_t k = 0; k < 4; ++k) {
       reactions(ledger, static_cast<TraitId>(trait), kUp, ++session);
       ledger.consolidate(s);
     }
@@ -260,14 +266,16 @@ void golden_history() {
               EvidenceReason::LivelySession, session);
     l.consolidate(s);
   }
-  const int16_t offsets[kTraitCount] = {1968, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+  // Curiosity moves one step per 4 sessions (G1-a): 3 × 0.03.
+  const int16_t offsets[kTraitCount] = {1476, 0, 0, 0, 0, 0, 0, 0, 0, 0};
   TEST_ASSERT_EQUAL_INT16_ARRAY(offsets, s.offset, kTraitCount);
   // Sociability (2/3 positive, coherence 1/3) decayed twice and never moved.
   TEST_ASSERT_EQUAL_INT32(2359, l.trait(TraitId::Sociability).pending);
   TEST_ASSERT_EQUAL_INT32(14941, l.trait(TraitId::Sociability).importance);
   TEST_ASSERT_EQUAL_UINT8(1, l.trait(TraitId::Sociability).sessions);
-  TEST_ASSERT_EQUAL_UINT16(4, l.journal(0).sequence);
-  TEST_ASSERT_EQUAL_INT16(492, l.journal(3).delta);
+  TEST_ASSERT_EQUAL_UINT16(3, l.journal(0).sequence);
+  TEST_ASSERT_EQUAL_INT16(492, l.journal(2).delta);
+  TEST_ASSERT_EQUAL_UINT16(0, l.journal(3).sequence);
 }
 
 void shadow_needs_the_owner_not_its_own_actions() {
@@ -290,13 +298,14 @@ void shadow_turns_reactions_into_evidence_and_consolidates_per_session() {
   PreferenceLearnerV3 learner(productLearnerConfig());  // p̂ = 0.5 everywhere
   PersonalityShadow shadow(0x5eed1234U);
   shadow.begin(0);
-  for (uint32_t k = 0; k < 3; ++k)
+  for (uint32_t k = 0; k < 4; ++k)
     session(shadow, learner, (k + 1) * 120 * kMinute, ActionId::Curious,
             LearnInteraction::QuietRequest, true);
   // e = 1 − 0.5 per pet, × 0.3, four per session capped at 0.5: three
-  // sessions reach 1.5 and the trait moves one full step at the third end.
-  TEST_ASSERT_EQUAL_UINT32(3, shadow.sessions());
-  TEST_ASSERT_EQUAL_UINT32(12, shadow.evidence());
+  // sessions reach 1.5, and the trait moves one full step at the end of the
+  // fourth (G1-a: ≥ 4 sessions).
+  TEST_ASSERT_EQUAL_UINT32(4, shadow.sessions());
+  TEST_ASSERT_EQUAL_UINT32(16, shadow.evidence());
   TEST_ASSERT_EQUAL_UINT32(1, shadow.shifts());
   TEST_ASSERT_EQUAL_INT16(EvidenceLedger::kMaxStep,
                           shadow.genome().offset[uint8_t(TraitId::Curiosity)]);

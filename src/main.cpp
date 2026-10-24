@@ -8,6 +8,7 @@
 #include <xuna/LocalBehavior.h>
 #include <xuna/identity/IdentityService.h>
 #include <xuna/life/BootSequence.h>
+#include <xuna/personality/Expression.h>
 #include "NvsSnapshotStore.h"
 #include "DeviceKey.h"
 #include "ScenePreference.h"
@@ -33,8 +34,8 @@ xuna::ScenePreference scenePreference;
 xuna::SceneMode sceneMode = xuna::SceneMode::Auto;
 bool bleReady = false, lifeReady = false, persistReady = false;
 bool displayReady = false;
-uint32_t diagnosticsAt = 0;
-uint32_t lastLoopUs = 0, maxLoopGapUs = 0;
+uint32_t diagnosticsAt = 0, personaAt = 0;
+uint32_t lastLoopUs = 0, maxLoopGapUs = 0, loops = 0;
 xuna::VisualIntent lastVisual = xuna::VisualIntent::Unknown;
 uint8_t loggedActivity = 255;
 const char* activityName(xuna::Activity a) {
@@ -66,6 +67,21 @@ void logActivityChange(uint32_t now) {
            loggedActivity==255 ? "none" : activityName(static_cast<xuna::Activity>(loggedActivity)));
   loggedActivity=state;
   logNeeds(head, now);
+}
+// Personality PE-2 shadow (parseable; traits/mood Q1.14, drives 0..65535).
+void logPersona(uint32_t now,const xuna::ExpressionStyle& style) {
+  const auto& p=core.personality();
+  const auto& g=p.genome();
+  const auto& a=p.affect().state();
+  const auto& d=p.drives().state();
+  using xuna::TraitId;using xuna::Temperament;
+  Serial.printf("persona t_s=%u cur=%d soc=%d play=%d tempo=%d sens=%d mood_v=%d mood_a=%d emo_v=%d comp=%u"
+                " explore=%u social=%u playd=%u bored=%u sessions=%u evidence=%u shifts=%u frame_ms=%u react_ms=%u\n",
+                now/1000,Temperament::effective(g,TraitId::Curiosity),Temperament::effective(g,TraitId::Sociability),
+                Temperament::effective(g,TraitId::Playfulness),Temperament::effective(g,TraitId::Tempo),
+                Temperament::effective(g,TraitId::Sensitivity),a.moodValence,a.moodArousal,a.emotionValence,
+                a.competenceQ16,d.explore,d.social,d.play,d.boredom,unsigned(p.sessions()),unsigned(p.evidence()),
+                unsigned(p.shifts()),style.framePeriodMs,style.reactionMs);
 }
 void logMemory() {
   Serial.printf("heap_free=%u heap_min=%u psram_heap_total=%u psram_free=%u\n",
@@ -150,6 +166,7 @@ void loop() {
   const uint32_t gap = loopUs - lastLoopUs;
   if (gap > maxLoopGapUs) maxLoopGapUs = gap;
   lastLoopUs = loopUs;
+  ++loops;
   const uint32_t now = millis();
   adapter.tick(now);
   const xuna::IdentityRecord* readyIdentity=
@@ -206,8 +223,13 @@ void loop() {
   }
   syncActivityVisual(now);
   logActivityChange(now);
+  // Personality expression (PE-2): tempo/mood set the sprite pace and how
+  // long a reaction stays; decisions are unchanged.
+  const auto style=xuna::Expression::styleFor(core.personality());
+  animation.setReactionMs(style.reactionMs);
   animation.update(now);
   if(displayReady){
+    display.setFramePeriod(style.framePeriodMs,now);
     display.setBackdrop(xuna::backdropFor(sceneMode,core.clock().dayPart(core.mono64())));
     display.update(now,animation.state());
   }
@@ -221,9 +243,15 @@ void loop() {
   if (uint32_t(now - diagnosticsAt) >= xuna::kDiagnosticsMs) {
     Serial.printf("scene=animated state=%s loop_gap_max_us=%u draws=%u draw_max_us=%u scene_max_us=%u\n",
                   (animation.state() == xuna::PetState::Idle ? "idle" : (animation.state() == xuna::PetState::Happy ? "happy" : (animation.state() == xuna::PetState::Sleep ? "sleep" : "curious"))), maxLoopGapUs, display.draws(), display.maxDrawUs(), display.maxSceneUs());
+    // Heat check: loops per window and the chip's own sensor (not the board surface).
+    Serial.printf("power loops=%u chip_temp_c=%.1f\n", unsigned(loops), temperatureRead());
     logNeeds("needs", now);
     logMemory(); diagnosticsAt = now;
-    maxLoopGapUs = 0;
+    maxLoopGapUs = 0; loops = 0;
   }
-  yield();
+  if (lifeReady && uint32_t(now - personaAt) >= 60000U) { logPersona(now, style); personaAt = now; }
+  // Sleep what is left of the period (a slow pass, e.g. a card push, only yields).
+  const uint32_t spentMs = (micros() - loopUs) / 1000U;
+  if (spentMs < xuna::kLoopPeriodMs) delay(xuna::kLoopPeriodMs - spentMs);
+  else yield();
 }

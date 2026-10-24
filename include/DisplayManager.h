@@ -11,6 +11,8 @@ class DisplayManager {
   // Window scene (redrawn only on change) and the effect above XUNA's head.
   void setBackdrop(Backdrop backdrop){backdrop_=backdrop;}
   void showEffect(EffectKind kind,uint32_t now){effect_.start(kind,now);}
+  // Pet sprite frame period (personality tempo, PE-2).
+  void setFramePeriod(uint16_t ms,uint32_t now){visual_.setInterval(ms,now);}
   // Full-screen cards over the scene (PSRAM framebuffer, allocated on first
   // use). Any button closes them; they also time out. False if unavailable.
   bool showStatus(const StatusCardModel& model,uint32_t now);

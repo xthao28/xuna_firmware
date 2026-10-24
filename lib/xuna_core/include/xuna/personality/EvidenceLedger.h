@@ -76,10 +76,12 @@ struct TraitLedger {
   uint16_t sourceWeight[kEvidenceSourceCount] = {};  // Σ |w·e| >> 6
 };
 
-// Consolidation thresholds; the defaults are the PE-1a values. Life Lab sweeps them.
+// Consolidation thresholds. Life Lab sweeps them. Defaults: G1-a (owner
+// 2026-10-24) raised minSessions 3 → 4 (random-owner drift 0.008 → 0.003,
+// alternating swing 0.009, signal ≈ +0.12 per month); the rest are PE-1a.
 struct LedgerConfig {
   int32_t minImportance = 24576;    // 1.5 [P]
-  uint8_t minSessions = 3;          // [P]
+  uint8_t minSessions = 4;          // [P] G1-a
   int32_t coherenceQ14 = 8192;      // |pending| ≥ 0.5 · importance [P]
   int32_t maxStep = 492;            // 0.03 [P]
   int32_t maxSessionShare = 8192;   // 0.5 per session [P]
@@ -94,7 +96,7 @@ class EvidenceLedger {
  public:
   static constexpr uint8_t kJournalSize = 4;
   static constexpr int32_t kMinImportance = 24576;  // LedgerConfig defaults
-  static constexpr uint8_t kMinSessions = 3;        // [P]
+  static constexpr uint8_t kMinSessions = 4;        // [P] G1-a
   static constexpr int32_t kMaxStep = 492;          // 0.03 [P]
   static constexpr int32_t kMaxPending = 65536;     // ±4.0 [P]
   static constexpr int32_t kMaxSessionShare = 8192; // 0.5 per session [P]

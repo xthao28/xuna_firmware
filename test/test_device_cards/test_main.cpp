@@ -87,6 +87,7 @@ void status_card_from_a_fresh_core_and_render_bounds() {
   TEST_ASSERT_FALSE(m.weekend);        // no trusted time: weekday wording
   TEST_ASSERT_EQUAL_STRING("d945c770", m.shortId);
   TEST_ASSERT_EQUAL_UINT8(uint8_t(PetState::Curious), uint8_t(m.state));
+  TEST_ASSERT_EQUAL_UINT8(uint8_t(MoodWord::Calm), uint8_t(m.mood));  // neutral, unseeded
   TEST_ASSERT_EQUAL_STRING("", makeStatusCard(core, 0, PetState::Idle, nullptr).shortId);
 
   Canvas c{pixels, 320, 170};
@@ -98,6 +99,8 @@ void status_card_from_a_fresh_core_and_render_bounds() {
   TEST_ASSERT_EQUAL_HEX16(card::kBackground, pixels[0]);
   TEST_ASSERT_EQUAL_STRING("tò mò", actionName(ActionId::Curious));
   TEST_ASSERT_EQUAL_STRING("đang ngủ", stateName(PetState::Sleep));
+  TEST_ASSERT_EQUAL_STRING("hơi buồn", moodName(MoodWord::Low));
+  TEST_ASSERT_EQUAL_STRING("bình yên", moodName(MoodWord::Calm));
 }
 
 bool checker(const void*, int x, int y) { return (x + y) % 2 == 0; }

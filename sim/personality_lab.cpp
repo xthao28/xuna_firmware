@@ -38,7 +38,6 @@ constexpr uint8_t kInteractions = kLearnInteractionCount;
 constexpr uint8_t kParts = LearnerV3Config::kMaxDayParts;
 constexpr uint8_t kActions = kLearnActionCount;
 constexpr uint64_t kMinuteMs = 60000ULL;
-constexpr uint64_t kDayMs = 1440 * kMinuteMs;
 constexpr uint32_t kUtcBase = 1792026000U;  // 2026-10-15 05:00 UTC = 12:00 local
 constexpr int16_t kTz = 420;                // Asia/Ho_Chi_Minh
 constexpr uint32_t kNever = 0xFFFFFFFFU;

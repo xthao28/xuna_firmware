@@ -125,6 +125,12 @@ unchanged (the `metric,…` lines stay byte-identical). Extra output:
 minimum sessions × coherence) and `drives,…` (drive weight). ≈ 33 s.
 Report: parent `docs/research/PE1-G1-report.md`.
 
+PE-2: the evidence rules moved to `xuna/personality/Personality.h`, which
+`LifeCore` also owns on the board; `PersonalityShadow` wraps it here. The
+ledger default is now ≥ 4 sessions (G1-a), so the `pe1,…` lines differ from
+the PE-1 report; output `docs/research/artifacts/PE2-shadow-output.txt`
+(≈ 87 s on the 2014 Mac).
+
 ## S20 golden vectors (`golden.cpp`)
 
 `golden.cpp` boots `BoardLab` from a blank v1 snapshot (a migrated pet with

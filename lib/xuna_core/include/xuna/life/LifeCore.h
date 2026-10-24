@@ -11,6 +11,7 @@
 #include <xuna/life/LifeFeel.h>
 #include <xuna/life/Needs.h>
 #include <xuna/persist/SnapshotStore.h>
+#include <xuna/personality/Personality.h>
 #include <xuna/time/ClockModel.h>
 #include <xuna/visual/VisualIntent.h>
 
@@ -134,6 +135,11 @@ class LifeCore {
   // Adopt the boot-recovered snapshot (Ok/Migrated) before begin().
   void restore(const LifeSnapshotV2& snapshot) { learner_.restore(snapshot); }
 
+  // Personality PE-2: the pet's IdentityRecord seed (0 = no identity yet,
+  // neutral genome), before begin(). Shadow + expression only; it never
+  // changes a decision, and its learned part is RAM only until PE-3.
+  void seedPersonality(uint32_t petSeed) { personality_.seed(petSeed); }
+
   bool begin(MonoMs now, bool restoreOk) {
     // Time is unknown after every boot; only the persisted watermark is kept
     // for rollback detection (plan §8.3).
@@ -142,6 +148,7 @@ class LifeCore {
     clock_.onBoot(mono64_, learner_.state().clock.lastTrustedUtcMinute);
     needs_.reset(now);
     mood_.reset();
+    personality_.begin(now);
     learner_.invalidate();
     for (uint8_t i = 0; i < kStatedHistory; ++i) statedIds_[i] = 0;
     statedNext_ = 0;
@@ -180,14 +187,17 @@ class LifeCore {
     bool owner = false;
     for (uint8_t i = 0; i < count; ++i) {
       if (!input.events) break;
-      process(input.events[i], input.now, signals, output);
       // Everything except XUNA's own idle choice comes from the owner.
-      if (input.events[i].kind != LifeCoreEventKind::Spontaneous) owner = true;
+      const bool fromOwner = input.events[i].kind != LifeCoreEventKind::Spontaneous;
+      if (fromOwner) personality_.ownerInput(input.now);
+      process(input.events[i], input.now, signals, output);
+      if (fromOwner) owner = true;
     }
     routine(owner, input.now, output);
     // D3: an unrated decision ends 120 s after it was shown.
     if (learner_.expire(input.now)) output.decisionExpired = true;
     mood_.update(needs_.state(), signals);
+    personality_.step(input.now, activity_.state(), needs_.state().energy);
     // An action visual lasts only while its activity does (e.g. Reacting
     // timing out to Idle falls back to the activity visual).
     if (activity_.state() != lastVisualActivity_)
@@ -233,7 +243,9 @@ class LifeCore {
   // ERROR_SAFE is read-only: nothing is written.
   bool forget() {
     if (!started_ || activity_.state() == Activity::ErrorSafe) return false;
-    return learner_.forget(commit_);
+    if (!learner_.forget(commit_)) return false;
+    personality_.forget();
+    return true;
   }
 
   // True while the owner can still react to the last shown decision.
@@ -246,6 +258,7 @@ class LifeCore {
     return learner_.preferred(interaction, dayPart);
   }
   const ActivityFsm& activity() const { return activity_; }
+  const Personality& personality() const { return personality_; }
 
   // Urgent-commit port (plan §9.5). Not owned. Null keeps the legacy
   // apply-then-persistRequested path for adapter-free tests.
@@ -303,6 +316,7 @@ class LifeCore {
         if (result != ProductLearner::Result::Applied) return;
         output.learningFeedbackApplied = true;
         output.reactionApplied = reaction;
+        if (reaction) personality_.reaction(event.approved);
         // With a committer the change is already durable; without one the
         // adapter must persist it afterwards (adapter-free tests).
         output.feedbackCommitted = commit_ != 0;
@@ -330,6 +344,8 @@ class LifeCore {
     if (decision.id == 0 || !learnActionId(decision.action, action)) return;
     if (!requestAction(static_cast<uint8_t>(action), 0, now)) return;
     learner_.show(decision, now);
+    personality_.shown(decision.action, static_cast<uint8_t>(interaction),
+                       decision.explore, decision.predictedQ16);
     signals.interaction = true;
     output.actionAccepted = true;
     output.decisionShown = true;
@@ -445,6 +461,7 @@ class LifeCore {
     lastVisual_ = outcome.visual;
     lastVisualActivity_ = activity_.state();
     applyAcceptedAction(needs_, action);
+    personality_.acted(static_cast<ActionId>(action));
     return true;
   }
 
@@ -469,6 +486,7 @@ class LifeCore {
   ActivityFsm activity_;
   Needs needs_;
   Mood mood_;
+  Personality personality_;
   ClockModel clock_;
   MonoMs lastNow_ = 0;
   uint64_t mono64_ = 0;

@@ -6,6 +6,7 @@
 #include <xuna/learning/HabitPredictor.h>
 #include <xuna/learning/LearnerVocabulary.h>
 #include <xuna/life/LifeCore.h>
+#include <xuna/personality/Expression.h>
 #include <xuna/visual/TextRaster.h>
 namespace xuna {
 // Device cards (owner-approved 2026-10-22): a status card on a GPIO0 hold and
@@ -35,6 +36,17 @@ inline const char* actionName(ActionId action) {
     case ActionId::Happy: return "vui vẻ";
     case ActionId::Sleep: return "ngủ";
     case ActionId::Curious: return "tò mò";
+  }
+  return "?";
+}
+inline const char* moodName(MoodWord mood) {
+  switch (mood) {
+    case MoodWord::Calm: return "bình yên";
+    case MoodWord::Glad: return "vui";
+    case MoodWord::Joyful: return "rất vui";
+    case MoodWord::Low: return "hơi buồn";
+    case MoodWord::Sad: return "buồn";
+    case MoodWord::Bored: return "hơi chán";
   }
   return "?";
 }
@@ -74,6 +86,7 @@ struct StatusCardModel {
   bool arrivalKnown = false, weekend = false;
   uint8_t arrivalHour = 0, arrivalMinute = 0;
   char shortId[9] = {};  // first 4 PetId bytes as hex; empty before hatch
+  MoodWord mood = MoodWord::Calm;  // personality PE-2 (Affect mood)
 };
 
 // The usual arrival is shown for today's day type when the time is trusted,
@@ -96,13 +109,17 @@ inline StatusCardModel makeStatusCard(const LifeCore& core, uint16_t energy, Pet
   }
   m.arrivalKnown = HabitPredictor::usualArrival(s.habit, m.weekend, m.arrivalHour, m.arrivalMinute);
   if (petId) hexPrefix(petId, 4, m.shortId);
+  m.mood = Expression::moodWord(core.personality().affect().state());
   return m;
 }
 
 // 320 × 170: title row, then a 2 × 4 grid of label/value cells.
 inline void renderStatusCard(Canvas& c, const CardFonts& f, const StatusCardModel& m) {
   fillRect(c, 0, 0, c.width, c.height, card::kBackground);
-  drawText(c, f.title, 12, 24, "XUNA", card::kTitle);
+  const int titleEnd = drawText(c, f.title, 12, 24, "XUNA", card::kTitle);
+  // Mood line next to the name (PE-2).
+  const int moodX = drawText(c, f.label, titleEnd + 12, 22, "tâm trạng", card::kLabel);
+  drawText(c, f.value, moodX + 6, 23, moodName(m.mood), card::kValue);
   if (m.shortId[0]) {
     char id[24];
     snprintf(id, sizeof(id), "mã %s", m.shortId);

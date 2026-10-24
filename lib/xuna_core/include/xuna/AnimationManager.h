@@ -23,8 +23,11 @@ class AnimationManager {
   void setState(PetState state, uint32_t now) {
     state_ = state; frame_ = 0; stateAt_ = frameAt_ = now; dirty_ = true;
   }
+  // How long a happy / curious reaction stays on screen (personality
+  // expression, PE-2); kHappyDurationMs by default.
+  void setReactionMs(uint32_t ms) { reactionMs_ = ms; }
   bool update(uint32_t now) {
-    if ((state_ == PetState::Happy || state_ == PetState::Curious) && uint32_t(now - stateAt_) >= kHappyDurationMs)
+    if ((state_ == PetState::Happy || state_ == PetState::Curious) && uint32_t(now - stateAt_) >= reactionMs_)
       setState(PetState::Idle, now);
     const uint32_t interval = state_ == PetState::Idle ? kIdleFrameMs : kHappyFrameMs;
     const uint32_t steps = uint32_t(now - frameAt_) / interval;
@@ -41,6 +44,7 @@ class AnimationManager {
   PetState state_ = PetState::Idle;
   uint8_t frame_ = 0;
   uint32_t stateAt_ = 0, frameAt_ = 0;
+  uint32_t reactionMs_ = kHappyDurationMs;
   bool dirty_ = true;
 };
 }
