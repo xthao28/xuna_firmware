@@ -20,6 +20,7 @@ class BleManager {
   BLECharacteristic* explanation_=nullptr;
   BLECharacteristic* identity_=nullptr;
   BLECharacteristic* proofChar_=nullptr;
+  BLECharacteristic* personality_=nullptr;
   BLECharacteristic* memories_[2]={nullptr,nullptr};
   std::atomic<bool> connected_{false};
   std::atomic<uint32_t> session_{0};
@@ -27,6 +28,7 @@ class BleManager {
   uint8_t lastState_=255;
   bool advertising_=true;
   uint8_t lastLife_[20]={},lastMemories_[2][20]={},lastExplanation_[20]={},lastIdentity_[IdentityCodec::kSize]={};
+  uint8_t lastPersonality_[PersonalityProjection::kSize]={};
   std::atomic<uint16_t> central_{0xffff};
   class ServerCallbacks: public BLEServerCallbacks {
     BleManager& owner_;
@@ -78,12 +80,12 @@ class BleManager {
     queue_=xQueueCreate(8,sizeof(Packet));proofQueue_=xQueueCreate(1,sizeof(ProofPacket));
     if(!queue_||!proofQueue_)return false;
     BLEDevice::init("XUNA");auto* server=BLEDevice::createServer();server->setCallbacks(&serverCallbacks_);
-    // Default createService budget is 15 handles; this service needs 20 (service,
-    // 9 characteristics × 2, status CCCD). Too few silently drops 000b/000c.
+    // Default createService budget is 15 handles; this service needs 22 (service,
+    // 10 characteristics × 2, status CCCD). Too few silently drops 000b/000c.
     auto* service=server->createService(BLEUUID(kService),32);
     auto* caps=service->createCharacteristic("7a6e0002-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ);
-    // byte 3 bit 0: Identity V2 device proof (7a6e000d).
-    uint8_t b[8]={1,8,0xbf,0x01,15,3,0x60,0x09};caps->setValue(b,sizeof(b));
+    // byte 3 bit 0: Identity V2 device proof (7a6e000d); bit 1: personality projection (7a6e000e).
+    uint8_t b[8]={1,8,0xbf,0x03,15,3,0x60,0x09};caps->setValue(b,sizeof(b));
     auto* command=service->createCharacteristic("7a6e0003-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_WRITE);command->setCallbacks(&writeCallbacks_);
     status_=service->createCharacteristic("7a6e0004-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ|BLECharacteristic::PROPERTY_NOTIFY);status_->addDescriptor(new BLE2902());
     lifeStatus_=service->createCharacteristic("7a6e0005-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ);
@@ -93,6 +95,7 @@ class BleManager {
     identity_=service->createCharacteristic("7a6e000c-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ);
     proofChar_=service->createCharacteristic("7a6e000d-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ|BLECharacteristic::PROPERTY_WRITE);
     proofChar_->setCallbacks(&proofCallbacks_);
+    personality_=service->createCharacteristic("7a6e000e-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ);
     {uint8_t idle[DeviceProof::kResponseSize]={1,uint8_t(DeviceProof::kResponseSize)};proofChar_->setValue(idle,sizeof(idle));}
     publish(0,0,0,PetState::Idle,0);service->start();
     auto* adv=BLEDevice::getAdvertising();adv->addServiceUUID(kService);adv->setScanResponse(true);adv->start();return true;
@@ -131,6 +134,8 @@ class BleManager {
     }
     adapter.encodeExplanation(b);
     if(std::memcmp(lastExplanation_,b,sizeof(b))){std::memcpy(lastExplanation_,b,sizeof(b));explanation_->setValue(b,sizeof(b));}
+    uint8_t persona[PersonalityProjection::kSize];adapter.encodePersonality(identity!=nullptr,persona);
+    if(std::memcmp(lastPersonality_,persona,sizeof(persona))){std::memcpy(lastPersonality_,persona,sizeof(persona));personality_->setValue(persona,sizeof(persona));}
     uint8_t id[IdentityCodec::kSize];IdentityCodec::encode(identity,adapter.generation(),id);
     if(std::memcmp(lastIdentity_,id,sizeof(id))){std::memcpy(lastIdentity_,id,sizeof(id));identity_->setValue(id,sizeof(id));}
     ProofPacket proofRequest;

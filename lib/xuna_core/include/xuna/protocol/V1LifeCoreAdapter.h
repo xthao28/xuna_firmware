@@ -8,6 +8,7 @@
 #include <xuna/learning/LearnerVocabulary.h>
 #include <xuna/life/LifeCore.h>
 #include <xuna/persist/SnapshotStore.h>
+#include <xuna/personality/PersonalityProjection.h>
 
 namespace xuna {
 
@@ -159,6 +160,11 @@ class V1LifeCoreAdapter {
     if(ExplanationCodec::encode(projection,bytes))return;
     for(size_t i=0;i<ExplanationCodec::kSize;++i)bytes[i]=0;
     bytes[0]=1;bytes[1]=ExplanationCodec::kSize;
+  }
+
+  // Personality projection (7a6e000e, PE-3); `seeded` = the pet has an identity.
+  void encodePersonality(bool seeded, uint8_t* bytes) const {
+    PersonalityProjection::encode(core_.personality(), seeded, bytes);
   }
 
   // Last durable snapshot generation (Identity V1 projection ordering key).

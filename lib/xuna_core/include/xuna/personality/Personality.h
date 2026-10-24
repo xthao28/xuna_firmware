@@ -14,8 +14,10 @@ namespace xuna {
 // temperament genome, evidence ledger, drives and affect as one unit, fed
 // with plain values so LifeCore can own it on the board. It watches what
 // really happens (owner inputs, choices XUNA showed, pet / shoo) and never
-// changes XUNA's decisions; only expression reads it (Expression.h). RAM
-// only until PE-3 (snapshot section 5): learned offsets restart at each boot.
+// changes XUNA's decisions; only expression reads it (Expression.h).
+// PE-3: offsets, the evidence ledger, the journal and the counters survive a
+// reboot through snapshot section 5 (PersonalityCodec). Drives and affect
+// are transient, like needs: they restart at every boot.
 //
 // Evidence comes only from the owner or the world (research §8.2):
 // - curiosity: a curious or exploratory choice the owner reacted to,
@@ -47,7 +49,24 @@ class Personality {
     if (petSeed) Temperament::seed(genome_, petSeed);
     else genome_ = TemperamentState();
     ledger_.forget();
+    session_ = evidence_ = shifts_ = decays_ = 0;
     refresh();
+    ++revision_;
+  }
+
+  // Adopt a validated stored state (PersonalityCodec::load, boot only) on
+  // top of the seeded baseline.
+  void restore(const int16_t* offsets, uint32_t session, uint32_t evidence, uint32_t shifts,
+               uint32_t decays, const TraitLedger* traits, const JournalEntry* journal,
+               uint8_t head, uint16_t sequence) {
+    for (uint8_t i = 0; i < kTraitCount; ++i) genome_.offset[i] = offsets[i];
+    session_ = session;
+    evidence_ = evidence;
+    shifts_ = shifts;
+    decays_ = decays;
+    ledger_.restore(traits, journal, head, sequence);
+    refresh();
+    ++revision_;
   }
 
   void begin(uint32_t now) {
@@ -62,6 +81,7 @@ class Personality {
     if (!open_) {
       open_ = true;
       ++session_;
+      ++revision_;
       inputs_ = 0;
       affect_.ownerArrived(false);
     }
@@ -116,6 +136,17 @@ class Personality {
     Temperament::forget(genome_);
     ledger_.forget();
     refresh();
+    ++revision_;
+  }
+
+  // Changes whenever something persisted changes (genome offsets, ledger,
+  // journal, counters); LifeCore re-encodes section 5 only then.
+  uint32_t revision() const { return revision_; }
+  // Traits moved since the last call (TraitConsolidated, journal has them).
+  uint8_t takeShifts() {
+    const uint8_t n = newShifts_;
+    newShifts_ = 0;
+    return n;
   }
 
   const TemperamentState& genome() const { return genome_; }
@@ -137,7 +168,10 @@ class Personality {
   };
 
   void observe(TraitId trait, int16_t value, EvidenceSource source, EvidenceReason reason) {
-    if (ledger_.observe(trait, value, source, reason, session_)) ++evidence_;
+    if (ledger_.observe(trait, value, source, reason, session_)) {
+      ++evidence_;
+      ++revision_;
+    }
   }
 
   void closeSession() {
@@ -150,7 +184,9 @@ class Personality {
     const ConsolidationReport r = ledger_.consolidate(genome_);
     shifts_ += r.shifted;
     decays_ += r.decayed;
+    if (r.shifted || r.decayed) ++revision_;
     if (r.shifted) refresh();
+    newShifts_ = static_cast<uint8_t>(newShifts_ + r.shifted);
   }
 
   void refresh() {
@@ -170,6 +206,8 @@ class Personality {
   uint32_t shifts_ = 0;
   uint32_t decays_ = 0;
   uint32_t evidence_ = 0;
+  uint32_t revision_ = 0;
+  uint8_t newShifts_ = 0;
 };
 
 }  // namespace xuna

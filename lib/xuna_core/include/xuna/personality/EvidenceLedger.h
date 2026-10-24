@@ -208,6 +208,20 @@ class EvidenceLedger {
     return journal_[(head_ + kJournalSize - 1 - age % kJournalSize) % kJournalSize];
   }
 
+  // Raw state for persistence (PersonalityCodec, PE-3): ring slots in
+  // storage order, the next slot to write and the last sequence used.
+  const JournalEntry& journalSlot(uint8_t slot) const { return journal_[slot % kJournalSize]; }
+  uint8_t journalHead() const { return head_; }
+  uint16_t journalSequence() const { return sequence_; }
+  // Adopt a validated stored state (boot only); config stays as constructed.
+  void restore(const TraitLedger* traits, const JournalEntry* journal, uint8_t head,
+               uint16_t sequence) {
+    for (uint8_t t = 0; t < kTraitCount; ++t) traits_[t] = traits[t];
+    for (uint8_t i = 0; i < kJournalSize; ++i) journal_[i] = journal[i];
+    head_ = static_cast<uint8_t>(head % kJournalSize);
+    sequence_ = sequence;
+  }
+
  private:
   static int32_t clamp(int32_t value, int32_t range) {
     return value > range ? range : value < -range ? -range : value;

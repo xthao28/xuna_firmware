@@ -27,6 +27,7 @@ enum class PersistClass : uint8_t { Ram,Log,Aggregate,ConditionalLog,Counter,Log
  X(GrowthStageChanged,0x61,Growth,SnapshotJournal,true) \
  X(SkillAcquired,0x62,Growth,SnapshotJournal,true) \
  X(TraitUnlocked,0x70,Evolution,SnapshotJournal,true) \
+ X(TraitConsolidated,0x71,Evolution,SnapshotJournal,true) \
  X(ConversationSessionEnded,0x80,Conversation,Aggregate,false) \
  X(StorageError,0xF0,Safety,CounterDiagnostic,false) \
  X(EventsDropped,0xF1,Safety,Counter,false) \

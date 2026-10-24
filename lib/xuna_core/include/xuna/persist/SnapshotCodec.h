@@ -9,6 +9,7 @@
 #include <xuna/learning/LearnerV3Codec.h>
 #include <xuna/learning/LearnerVocabulary.h>
 #include <xuna/life/Needs.h>
+#include <xuna/personality/PersonalityCodec.h>
 
 namespace xuna {
 
@@ -46,7 +47,7 @@ enum class SectionId : uint8_t {
   Clock = 2,             // trusted-time watermark (S10)
   Lifecycle = 3,         // reserved: M06 stage
   Needs = 4,
-  Personality = 5,       // reserved: M06
+  Personality = 5,       // optional, PE-3 2026-10-24 (PersonalityCodec)
   Learner = 6,
   Habit = 7,             // routine learning (plan §9.7), 2026-10-19
   Skills = 8,            // reserved: teachable tricks
@@ -80,6 +81,13 @@ struct SnapshotEpisodes {
   uint8_t next = 0;
 };
 
+// Section 5 bytes as PersonalityCodec wrote them (LifeCore keeps them in
+// step with its Personality); length 0 = nothing learned, no section.
+struct SnapshotPersonality {
+  uint16_t length = 0;
+  uint8_t bytes[PersonalityCodec::kMaxSize] = {};
+};
+
 struct LifeSnapshotV2 {
   uint32_t generation = 0;
   SnapshotCounters counters;
@@ -89,6 +97,7 @@ struct LifeSnapshotV2 {
   PreferenceLearnerV3 learner;  // its config sets the shape loaded into RAM
   SnapshotEpisodes episodes;
   HabitState habit;  // routine learning (plan §9.7); section 7 when non-empty
+  SnapshotPersonality personality;  // PE-3; section 5 when non-empty
 
   explicit LifeSnapshotV2(const LearnerV3Config& config = productLearnerConfig())
       : learner(config) {}
@@ -133,6 +142,7 @@ class SnapshotCodec {
            kSectionHeaderSize + LearnerV3Codec::encodedSize(s.learner.config()) +
            statedSectionSize(s) +
            (s.habit.empty() ? 0 : kSectionHeaderSize + kHabitSize) +
+           (s.personality.length ? kSectionHeaderSize + s.personality.length : 0) +
            kSectionHeaderSize + kEpisodesSize + kTrailerSize;
   }
 
@@ -198,6 +208,14 @@ class SnapshotCodec {
       put32(tail + 2, static_cast<uint32_t>(s.habit.gainQ16));
       put16(tail + 6, s.habit.sessions);
       p += kHabitSize;
+    }
+
+    if (s.personality.length) {
+      if (s.personality.length > PersonalityCodec::kMaxSize) return 0;
+      p = section(p, SectionId::Personality, false, PersonalityCodec::kVersion,
+                  s.personality.length);
+      for (uint16_t i = 0; i < s.personality.length; ++i) p[i] = s.personality.bytes[i];
+      p += s.personality.length;
     }
 
     bool reaction = false;
@@ -375,6 +393,16 @@ class SnapshotCodec {
         if (s.habit.sessions == 0) return LoadResult::Corrupt;  // never written empty
         return LoadResult::Ok;
       }
+      case SectionId::Personality:
+        // Optional and covered by the CRC: content that fails validation is
+        // skipped (XUNA keeps its innate temperament) instead of failing
+        // the whole snapshot into ERROR_SAFE.
+        if (version > PersonalityCodec::kVersion ||
+            !PersonalityCodec::valid(d, length))
+          return LoadResult::Missing;
+        s.personality.length = length;
+        for (uint16_t i = 0; i < length; ++i) s.personality.bytes[i] = d[i];
+        return LoadResult::Ok;
       case SectionId::Episodes:
         if (version > kEpisodesReactionVersion) return LoadResult::Missing;
         return parseEpisodes(d, length, s.episodes, version >= 2 ? 3 : 2);

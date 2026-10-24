@@ -12,6 +12,7 @@
 #include <xuna/life/Needs.h>
 #include <xuna/persist/SnapshotStore.h>
 #include <xuna/personality/Personality.h>
+#include <xuna/personality/PersonalityCodec.h>
 #include <xuna/time/ClockModel.h>
 #include <xuna/visual/VisualIntent.h>
 
@@ -95,6 +96,7 @@ struct LifeCoreStepOutput {
   uint32_t decisionId = 0;
   uint8_t decisionContext = 0;     // LearnInteraction of the pending decision
   uint8_t decisionDayPart = 0;     // 0 = unknown; 1–4 morning…night
+  uint8_t traitsConsolidated = 0;  // personality traits moved (TraitConsolidated; journal)
 };
 
 // Learner day-part index (plan §9.2): 0 unknown, 1 morning, 2 afternoon,
@@ -135,10 +137,16 @@ class LifeCore {
   // Adopt the boot-recovered snapshot (Ok/Migrated) before begin().
   void restore(const LifeSnapshotV2& snapshot) { learner_.restore(snapshot); }
 
-  // Personality PE-2: the pet's IdentityRecord seed (0 = no identity yet,
-  // neutral genome), before begin(). Shadow + expression only; it never
-  // changes a decision, and its learned part is RAM only until PE-3.
-  void seedPersonality(uint32_t petSeed) { personality_.seed(petSeed); }
+  // Personality: the pet's IdentityRecord seed (0 = no identity yet, neutral
+  // genome), after restore() and before begin(). The restored snapshot's
+  // section 5 (PE-3) then brings back what XUNA learned about its character.
+  // Shadow + expression only; it never changes a decision.
+  void seedPersonality(uint32_t petSeed) {
+    personality_.seed(petSeed);
+    const SnapshotPersonality& stored = learner_.state().personality;
+    if (petSeed && stored.length) PersonalityCodec::load(stored.bytes, stored.length, personality_);
+    syncPersonality();
+  }
 
   bool begin(MonoMs now, bool restoreOk) {
     // Time is unknown after every boot; only the persisted watermark is kept
@@ -198,6 +206,8 @@ class LifeCore {
     if (learner_.expire(input.now)) output.decisionExpired = true;
     mood_.update(needs_.state(), signals);
     personality_.step(input.now, activity_.state(), needs_.state().energy);
+    output.traitsConsolidated = personality_.takeShifts();
+    syncPersonality();
     // An action visual lasts only while its activity does (e.g. Reacting
     // timing out to Idle falls back to the activity visual).
     if (activity_.state() != lastVisualActivity_)
@@ -243,8 +253,9 @@ class LifeCore {
   // ERROR_SAFE is read-only: nothing is written.
   bool forget() {
     if (!started_ || activity_.state() == Activity::ErrorSafe) return false;
-    if (!learner_.forget(commit_)) return false;
+    if (!learner_.forget(commit_)) return false;  // commits without section 5
     personality_.forget();
+    syncPersonality();
     return true;
   }
 
@@ -441,6 +452,18 @@ class LifeCore {
     output.persistRequested = commit_ == 0;
   }
 
+  // PE-3: keep section 5 of the RAM snapshot equal to the personality, so
+  // the next commit (reaction, stated preference, checkpoint) stores it.
+  // Lazy like the active-time checkpoint: evidence from a reaction reaches
+  // flash with the following commit (≤ 5 min), not with that reaction's own.
+  void syncPersonality() {
+    if (personality_.revision() == syncedRevision_) return;
+    SnapshotPersonality& stored = learner_.state().personality;
+    stored.length = static_cast<uint16_t>(
+        PersonalityCodec::encode(personality_, stored.bytes, sizeof(stored.bytes)));
+    syncedRevision_ = personality_.revision();
+  }
+
   // Wrap-safe 32 → 64-bit extension; callers pass non-decreasing millis().
   void extendMono(MonoMs now) {
     mono64_ += static_cast<MonoMs>(now - lastNow_);
@@ -487,6 +510,7 @@ class LifeCore {
   Needs needs_;
   Mood mood_;
   Personality personality_;
+  uint32_t syncedRevision_ = 0xFFFFFFFFU;
   ClockModel clock_;
   MonoMs lastNow_ = 0;
   uint64_t mono64_ = 0;

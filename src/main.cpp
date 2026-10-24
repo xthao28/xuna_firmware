@@ -35,6 +35,7 @@ xuna::SceneMode sceneMode = xuna::SceneMode::Auto;
 bool bleReady = false, lifeReady = false, persistReady = false;
 bool displayReady = false;
 uint32_t diagnosticsAt = 0, personaAt = 0;
+uint16_t loggedJournal = 0;  // newest personality journal sequence already logged
 uint32_t lastLoopUs = 0, maxLoopGapUs = 0, loops = 0;
 xuna::VisualIntent lastVisual = xuna::VisualIntent::Unknown;
 uint8_t loggedActivity = 255;
@@ -82,6 +83,14 @@ void logPersona(uint32_t now,const xuna::ExpressionStyle& style) {
                 Temperament::effective(g,TraitId::Sensitivity),a.moodValence,a.moodArousal,a.emotionValence,
                 a.competenceQ16,d.explore,d.social,d.play,d.boredom,unsigned(p.sessions()),unsigned(p.evidence()),
                 unsigned(p.shifts()),style.framePeriodMs,style.reactionMs);
+}
+// A trait moved (TraitConsolidated, PE-3): the newest journal entry, once.
+void logTraitShift() {
+  const auto& e=core.personality().ledger().journal(0);
+  if(e.sequence==loggedJournal)return;
+  loggedJournal=e.sequence;
+  if(e.sequence)Serial.printf("persona_shift seq=%u trait=%u delta=%d reason=%u source=%u sessions=%u\n",
+                              e.sequence,e.trait,e.delta,e.reason,e.source,e.sessions);
 }
 void logMemory() {
   Serial.printf("heap_free=%u heap_min=%u psram_heap_total=%u psram_free=%u\n",
@@ -142,6 +151,10 @@ void setup() {
     Serial.println();
   }
   adapter.begin(now);
+  loggedJournal=core.personality().ledger().journal(0).sequence;  // restored entries are not new
+  Serial.printf("persona_restored bytes=%u sessions=%u evidence=%u journal=%u\n",
+                unsigned(core.snapshot().personality.length),unsigned(core.personality().sessions()),
+                unsigned(core.personality().evidence()),unsigned(loggedJournal));
   Serial.printf("learner=ProductLearner-v3 preferred quiet=%u play=%u\n",
                 unsigned(adapter.preferred(0)),unsigned(adapter.preferred(1)));
   syncActivityVisual(now);logActivityChange(now);
@@ -224,6 +237,7 @@ void loop() {
   }
   syncActivityVisual(now);
   logActivityChange(now);
+  logTraitShift();
   // Personality expression (PE-2): tempo/mood set the sprite pace and how
   // long a reaction stays; decisions are unchanged.
   const auto style=xuna::Expression::styleFor(core.personality());
