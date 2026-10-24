@@ -57,6 +57,7 @@ struct Day {
   int64_t moodSum;                                    // mood valence, one sample a minute
   int16_t moodMin, moodMax;
   uint32_t moodSamples;
+  uint32_t restMinutes;  // PE-2b: minutes Resting or Sleeping
 };
 
 struct Life {
@@ -211,6 +212,7 @@ bool live(const Run& spec, Life& life) {
     const LifeCoreStepOutput& out = lab.adapter().last();
     shadow.step(now, out);
     if (onMinute) {
+      if (out.activity == Activity::Resting || out.activity == Activity::Sleeping) ++day.restMinutes;
       const int16_t mood = shadow.affect().state().moodValence;
       day.moodSum += mood;
       ++day.moodSamples;
@@ -437,6 +439,21 @@ double moodMean(const Life& l, uint32_t from, uint32_t to) {
   return n ? unit(int32_t(sum / n)) : 0;
 }
 
+// PE-2b: XUNA's own (quiet-context) choices and rest per day, days from..to.
+double quietPerDay(const Life& l, uint32_t from, uint32_t to) {
+  uint64_t n = 0;
+  for (uint32_t d = from; d <= to; ++d)
+    for (uint8_t p = 0; p < kParts; ++p)
+      for (uint8_t a = 0; a < kActions; ++a) n += l.day[d].shown[0][p][a];
+  return double(n) / (to - from + 1);
+}
+
+double restPerDay(const Life& l, uint32_t from, uint32_t to) {
+  uint64_t n = 0;
+  for (uint32_t d = from; d <= to; ++d) n += l.day[d].restMinutes;
+  return double(n) / (to - from + 1);
+}
+
 double moodLow(const Life& l, uint32_t from, uint32_t to) {
   int16_t low = 32767;
   for (uint32_t d = from; d <= to; ++d)
@@ -489,6 +506,26 @@ void pe1(const char* scenario, const char* name, double value, const char* note 
 
 void metric(const char* scenario, const char* name, double value, const char* note = "") {
   std::printf("metric,%s,%s,%.4f,%s\n", scenario, name, value, note);
+}
+
+void pe2(const char* scenario, const char* name, double value, const char* note = "") {
+  std::printf("pe2,%s,%s,%.4f,%s\n", scenario, name, value, note);
+}
+
+// Mean and spread (max − min) over a group of lives.
+void pe2Rhythm(const char* scenario, const Life* lives, uint32_t count) {
+  double q = 0, r = 0, qLo = 1e9, qHi = -1e9;
+  for (uint32_t i = 0; i < count; ++i) {
+    const double qi = quietPerDay(lives[i], kWeekFrom, kWeekTo);
+    q += qi;
+    r += restPerDay(lives[i], kWeekFrom, kWeekTo);
+    if (qi < qLo) qLo = qi;
+    if (qi > qHi) qHi = qi;
+  }
+  pe2(scenario, "own_choices_per_day", q / count, "quiet-context decisions, days 23-29");
+  pe2(scenario, "own_choices_spread_pct", q > 0 ? 100.0 * (qHi - qLo) / (q / count) : 0,
+      "max - min across pets, % of mean");
+  pe2(scenario, "rest_minutes_per_day", r / count, "Resting + Sleeping, days 23-29");
 }
 
 
@@ -622,6 +659,7 @@ bool ownersVersusSeeds() {
     }
   pe1("owners", "shifts_per_run", shifts / (3 * kSeeds), "consolidations that moved a trait in 30 days");
   pe1("owners", "mood_mean_last_week", mood / (3 * kSeeds));
+  pe2Rhythm("owners", &lives[0][0], 3 * kSeeds);
   return true;
 }
 
@@ -670,6 +708,7 @@ bool entropyOnly() {
   pe1("entropy_only", "spread_emotion_gain", hi[1] - lo[1], "neutral 0.5");
   pe1("entropy_only", "spread_explore_rate_pct", 100.0 * (hi[2] - lo[2]) / 512, "of the neutral rate");
   pe1("entropy_only", "spread_mood_mean", hi[3] - lo[3], "last week");
+  pe2Rhythm("entropy_only", g_lives, kSeeds);
   return true;
 }
 
@@ -744,6 +783,7 @@ bool silent() {
   }
   metric("silent", "learner_equal_to_boot_day29", same, "of 5");
   metric("silent", "js_week1_vs_week4", weeks / kSeeds);
+  pe2Rhythm("silent", g_lives, kSeeds);
   double reactionTraits = 0;
   for (uint32_t s = 0; s < kSeeds; ++s)
     for (uint8_t k = 0; k < 3; ++k) {  // curiosity, sociability, playfulness
@@ -992,6 +1032,7 @@ int main() {
               "<decisions>,<pets>,<shoos>,<day-29 greedy quiet p0-4 greeting p0-4>,<learner fingerprint>\n");
   std::printf("# metric,<scenario>,<name>,<value>,<note>\n");
   std::printf("# pe1,<scenario>,<name>,<value>,<note>   PE-1 shadow beside the same lives\n");
+  std::printf("# pe2,<scenario>,<name>,<value>,<note>   PE-2b rhythm: own choices and rest per day\n");
   bool ok = ownersVersusSeeds();
   ok = ok && entropyOnly();
   ok = ok && absence();

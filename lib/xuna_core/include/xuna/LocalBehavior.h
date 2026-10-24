@@ -10,9 +10,10 @@ class LocalBehavior {
     return choosePreferred(now,idle,life.choose(0),action);
   }
   // Same routine with the preferred quiet action supplied by the caller (the
-  // board trial passes learner v3's greedy quiet action).
-  bool choosePreferred(uint32_t now,bool idle,uint8_t preferred,uint8_t& action){
-    if(!idle||uint32_t(now-activityAt_)<60000)return false;
+  // board trial passes learner v3's greedy quiet action). `waitMs`: quiet time
+  // before XUNA acts (PE-2b: Expression::spontaneousWaitMs, from drives).
+  bool choosePreferred(uint32_t now,bool idle,uint8_t preferred,uint8_t& action,uint32_t waitMs=60000){
+    if(!idle||uint32_t(now-activityAt_)<waitMs)return false;
     activityAt_=now;action=preferred;return true;
   }
 };

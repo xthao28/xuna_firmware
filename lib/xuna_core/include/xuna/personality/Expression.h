@@ -17,6 +17,14 @@ namespace xuna {
 // - liveliness = tempo + mood arousal / 2 → frame period 100 ms ∓ 15 %;
 // - feeling = sensitivity + |emotion valence| / 2 → reaction 2400 ms ± 15 %.
 // A neutral genome with a calm mood gives exactly today's 100 ms / 2400 ms.
+//
+// PE-2b (owner 2026-10-24): how soon XUNA acts on its own when left alone
+// (the offline quiet routine, 60 s before): wait = 60 s × (1 − 0.15·t), so
+// 51–69 s, with t = (curiosity + playfulness) / 2 at full effect ±0.3. An
+// eager pet acts sooner, a placid one later (innate + learned). The learner
+// still decides *what* XUNA does. Drives were tried and left out: they sit
+// near full most of the day, so they only made every pet busier (+12–27 %)
+// and doubled random-owner drift (Life Lab, PE-2 record §8).
 struct ExpressionStyle {
   uint16_t framePeriodMs = 100;
   uint16_t reactionMs = static_cast<uint16_t>(kHappyDurationMs);
@@ -34,6 +42,8 @@ class Expression {
   static constexpr int16_t kGlad = 983;             // mood valence 0.06
   static constexpr int16_t kJoyful = 4096;          // 0.25
   static constexpr int16_t kBored = -1638;          // mood arousal −0.1
+  static constexpr int32_t kWaitMs = 60000;            // the routine before PE-2b
+  static constexpr int32_t kTemperamentWaitMs = 9000;  // ±15 % of 60 s
 
   static ExpressionStyle styleFor(const Personality& p) {
     return styleFor(p.genome(), p.affect().state());
@@ -52,6 +62,16 @@ class Expression {
     s.reactionMs = static_cast<uint16_t>(int32_t(kHappyDurationMs) +
                                          int32_t(kReactionSwingMs) * feeling / kFullEffect);
     return s;
+  }
+
+  static uint32_t spontaneousWaitMs(const Personality& p) {
+    return spontaneousWaitMs(p.genome());
+  }
+
+  static uint32_t spontaneousWaitMs(const TemperamentState& genome) {
+    const int32_t eager = limit((int32_t(Temperament::effective(genome, TraitId::Curiosity)) +
+                                 Temperament::effective(genome, TraitId::Playfulness)) / 2);
+    return static_cast<uint32_t>(kWaitMs - kTemperamentWaitMs * eager / kFullEffect);
   }
 
   static MoodWord moodWord(const AffectState& a) {

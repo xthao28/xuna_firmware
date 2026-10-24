@@ -67,7 +67,12 @@ void xuna_alone_gives_no_evidence_owner_reactions_do() {
   TEST_ASSERT_EQUAL_UINT32(0, lab.core().personality().sessions());
   TEST_ASSERT_EQUAL_UINT32(0, lab.core().personality().evidence());
 
-  // The owner presses GPIO0 (XUNA answers the greeting), then pets it.
+  // When XUNA is idle again and no reaction is open, the owner presses GPIO0
+  // (XUNA answers the greeting), then pets it.
+  while (lab.core().reactionOpen(now) || lab.adapter().last().activity != Activity::Idle) {
+    now += 1000;
+    lab.loop(now);
+  }
   TEST_ASSERT_TRUE(lab.greeting(now));
   TEST_ASSERT_TRUE(lab.greeting(now + 2000));
   TEST_ASSERT_TRUE(lab.adapter().lastReactionApplied());
@@ -143,6 +148,44 @@ void mood_words_follow_mood() {
   TEST_ASSERT_EQUAL_UINT8(uint8_t(MoodWord::Bored), uint8_t(Expression::moodWord(a)));
 }
 
+void spontaneous_wait_follows_temperament() {
+  TemperamentState g;
+  TEST_ASSERT_EQUAL_UINT32(60000, Expression::spontaneousWaitMs(g));  // today's routine
+  g.offset[uint8_t(TraitId::Curiosity)] = Expression::kFullEffect;
+  g.offset[uint8_t(TraitId::Playfulness)] = Expression::kFullEffect;
+  TEST_ASSERT_EQUAL_UINT32(51000, Expression::spontaneousWaitMs(g));  // eager
+  g.offset[uint8_t(TraitId::Curiosity)] = kOffsetRange;              // beyond 0.3: no more
+  TEST_ASSERT_EQUAL_UINT32(51000, Expression::spontaneousWaitMs(g));
+  g.offset[uint8_t(TraitId::Curiosity)] = -Expression::kFullEffect;
+  g.offset[uint8_t(TraitId::Playfulness)] = -Expression::kFullEffect;
+  TEST_ASSERT_EQUAL_UINT32(69000, Expression::spontaneousWaitMs(g));  // placid
+  for (uint32_t seed = 1; seed <= 200; ++seed) {  // innate ±0.15: half the effect at most
+    TemperamentState s;
+    Temperament::seed(s, seed);
+    const uint32_t w = Expression::spontaneousWaitMs(s);
+    TEST_ASSERT_TRUE(w >= 55500 && w <= 64500);
+  }
+  LocalBehavior routine;
+  uint8_t action = 0;
+  routine.activity(0);
+  TEST_ASSERT_FALSE(routine.choosePreferred(50999, true, 1, action, 51000));
+  TEST_ASSERT_TRUE(routine.choosePreferred(51000, true, 1, action, 51000));
+  TEST_ASSERT_FALSE(routine.choosePreferred(51000 + 59999, true, 1, action));  // default 60 s
+}
+
+void board_routine_waits_by_the_pets_temperament() {
+  BoardLab lab(7);
+  bootMigrated(lab);
+  const uint32_t wait = Expression::spontaneousWaitMs(lab.core().personality());
+  TEST_ASSERT_TRUE(wait != 60000);  // this pet is not exactly neutral
+  uint32_t first = 0;
+  for (uint32_t now = 1000; now <= 80000 && !first; now += 1000) {
+    lab.loop(now);
+    if (lab.adapter().last().decisionShown) first = now;
+  }
+  TEST_ASSERT_EQUAL_UINT32((wait + 999) / 1000 * 1000, first);
+}
+
 void setUp() {}
 void tearDown() {}
 
@@ -154,5 +197,7 @@ int main() {
   RUN_TEST(forget_clears_evidence_and_keeps_the_baseline);
   RUN_TEST(style_follows_the_real_trait_range_and_is_bounded);
   RUN_TEST(mood_words_follow_mood);
+  RUN_TEST(spontaneous_wait_follows_temperament);
+  RUN_TEST(board_routine_waits_by_the_pets_temperament);
   return UNITY_END();
 }

@@ -216,9 +216,10 @@ void loop() {
     }
     if(anyButton)localBehavior.activity(now);
     uint8_t quietAction=0;
-    // Idle for a minute: XUNA picks what to do itself; the owner may react.
+    // Idle for a while (51–69 s, by temperament): XUNA picks what to do itself; the owner may react.
     if(localBehavior.choosePreferred(now,adapter.last().activity==xuna::Activity::Idle,
-                                    static_cast<uint8_t>(adapter.preferred(0)),quietAction))
+                                    static_cast<uint8_t>(adapter.preferred(0)),quietAction,
+                                    xuna::Expression::spontaneousWaitMs(core.personality())))
       adapter.localSpontaneous(now);
   }
   syncActivityVisual(now);

@@ -9,6 +9,7 @@
 #include <xuna/base/Random.h>
 #include <xuna/life/BootSequence.h>
 #include <xuna/life/LifeCoreSnapshotLab.h>
+#include <xuna/personality/Expression.h>
 #include <xuna/protocol/V1LifeCoreAdapter.h>
 
 namespace xuna {
@@ -80,7 +81,8 @@ class BoardLab {
       uint8_t quietAction = 0;
       if (ram_->local.choosePreferred(
               now, ram_->adapter.last().activity == Activity::Idle,
-              static_cast<uint8_t>(ram_->adapter.preferred(0)), quietAction))
+              static_cast<uint8_t>(ram_->adapter.preferred(0)), quietAction,
+              Expression::spontaneousWaitMs(ram_->core.personality())))
         ram_->adapter.localSpontaneous(now);
       if (last_.persistReady() && ram_->adapter.checkpointDue(now)) {
         ++checkpoints_;
