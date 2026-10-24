@@ -96,6 +96,10 @@ class Drives {
     sinceContact_ = 0;
   }
 
+  // Track A variants: looking around explores, bouncing plays.
+  void satisfyExplore() { state_.explore = lower(state_.explore, kSatisfy); }
+  void satisfyPlay() { state_.play = lower(state_.play, kSatisfy); }
+
   // XUNA showed `action` (whoever chose it).
   void acted(ActionId action) {
     const uint8_t id = static_cast<uint8_t>(action);

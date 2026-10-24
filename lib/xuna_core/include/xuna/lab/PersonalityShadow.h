@@ -30,7 +30,7 @@ class PersonalityShadow {
   void begin(uint32_t now) { p_.begin(now); }
 
   // Any owner input (button, app command). Call before reaction().
-  void ownerInput(uint32_t now) { p_.ownerInput(now); }
+  void ownerInput(uint32_t now) { p_.ownerInput(now); }  // shadow: no variants
 
   // XUNA showed a learner decision (LifeCoreStepOutput::decisionShown).
   void shown(const LifeCoreStepOutput& out, const PreferenceLearnerV3& learner) {

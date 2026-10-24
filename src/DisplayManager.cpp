@@ -2,6 +2,7 @@
 #include "DisplayManager.h"
 #include "assets/XunaAnimatedScene.h"
 #include "assets/XunaUiFont.h"
+#include "assets/XunaTrackA.h"
 #include <esp_heap_caps.h>
 #include <qrcodegen.h>
 static_assert(USER_SETUP_ID == 206, "Use the standard T-Display-S3 LCD setup");
@@ -26,6 +27,10 @@ static_assert(xuna::scene::kEffectH - xuna::scene::kEffectSpriteH >= xuna::React
               "Effect sprite must fit its region at full rise");
 static_assert(xuna::scene::kWindowCount == 4 && xuna::scene::kEffectCount == 3,
               "Asset order must match Backdrop and EffectKind");
+static_assert(xuna::scene::kFrameCount == xuna::VariantPlayer::kBaseFrames &&
+              xuna::scene::kVariantCount == xuna::kVisualVariantCount &&
+              xuna::scene::kVariantFrames == xuna::VariantPlayer::kFramesPerVariant,
+              "Track A asset must match VariantPlayer and VisualVariant");
 static_assert(xuna::scene::kGlassW <= 255 && xuna::scene::kGlassH <= 255, "Glass fits WindowWeather");
 namespace xuna {
 bool DisplayManager::begin() {
@@ -63,9 +68,13 @@ void DisplayManager::update(uint32_t now,PetState state){
   const EffectSample sample=effect_.sample(now);
   if(sample!=drawnEffect_){drawEffect(sample);sceneDrawn=true;}
   if(sceneDrawn){const uint32_t elapsed=micros()-sceneStart;if(elapsed>maxSceneUs_)maxSceneUs_=elapsed;}
-  const uint8_t frame=visual_.frame(now,state,random_);if(frame==lastFrame_)return;
+  const uint8_t base=visual_.frame(now,state,random_);  // keeps the base timing either way
+  const int variantFrame=variant_.frame(now,state,visual_.interval());
+  const uint8_t frame=variantFrame>=0?uint8_t(variantFrame):base;if(frame==lastFrame_)return;
   const uint32_t start=micros();
-  const uint16_t* pixels=scene::kFrames+frame*scene::kSpriteWidth*scene::kSpriteHeight;
+  const uint16_t* pixels=frame>=VariantPlayer::kBaseFrames
+      ?scene::kVariantSprites+(frame-VariantPlayer::kBaseFrames)*scene::kSpriteWidth*scene::kSpriteHeight
+      :scene::kFrames+frame*scene::kSpriteWidth*scene::kSpriteHeight;
   // Every frame uses the same full canvas: union of previous/current bounding boxes.
   // Restore/composite offscreen, then push one opaque region (no erase-then-draw flicker).
   for(unsigned y=0;y<scene::kSpriteHeight;++y)for(unsigned x=0;x<scene::kSpriteWidth;++x){

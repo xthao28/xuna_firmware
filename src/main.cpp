@@ -238,6 +238,12 @@ void loop() {
   syncActivityVisual(now);
   logActivityChange(now);
   logTraitShift();
+  // Track A: a variant LifeCore started (greeting, yawn, look around, bounce).
+  if(const auto v=core.takeVariant();v!=xuna::VisualVariant::None){
+    if(displayReady)display.playVariant(v,now);
+    static const char* const kVariantNames[]={"none","look_around","yawn_stretch","bounce_play","greet_nuzzle"};
+    Serial.printf("variant=%s\n",kVariantNames[static_cast<uint8_t>(v)]);
+  }
   // Personality expression (PE-2): tempo/mood set the sprite pace and how
   // long a reaction stays; decisions are unchanged.
   const auto style=xuna::Expression::styleFor(core.personality());

@@ -7,6 +7,7 @@
 #include <xuna/life/Affect.h>
 #include <xuna/life/Drives.h>
 #include <xuna/personality/EvidenceLedger.h>
+#include <xuna/visual/VisualIntent.h>
 
 namespace xuna {
 
@@ -76,8 +77,10 @@ class Personality {
     last_ = Shown();
   }
 
-  // Any owner input (button, app command). Call before reaction().
-  void ownerInput(uint32_t now) {
+  // Any owner input (button, app command). Call before reaction(). True when
+  // it opened a new owner session (the owner is back after kSessionGapMs).
+  bool ownerInput(uint32_t now) {
+    const bool opened = !open_;
     if (!open_) {
       open_ = true;
       ++session_;
@@ -88,6 +91,13 @@ class Personality {
     lastOwner_ = now;
     if (inputs_ < 0xffff) ++inputs_;
     drives_.ownerContact();
+    return opened;
+  }
+
+  // A Track A variant was shown: looking around satisfies explore. Bouncing
+  // plays over a happy choice, which already satisfied play (acted).
+  void expressed(VisualVariant variant) {
+    if (variant == VisualVariant::LookAround) drives_.satisfyExplore();
   }
 
   // XUNA showed a learner decision: learner action index, LearnInteraction,

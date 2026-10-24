@@ -3,6 +3,7 @@
 #include <xuna/visual/PetVisualAnimation.h>
 #include <xuna/visual/DeviceCards.h>
 #include <xuna/visual/SceneEffects.h>
+#include <xuna/visual/VariantPlayer.h>
 namespace xuna {
 class DisplayManager {
  public:
@@ -13,6 +14,8 @@ class DisplayManager {
   void showEffect(EffectKind kind,uint32_t now){effect_.start(kind,now);}
   // Pet sprite frame period (personality tempo, PE-2).
   void setFramePeriod(uint16_t ms,uint32_t now){visual_.setInterval(ms,now);}
+  // Track A variant over the current pose (LifeCore::takeVariant).
+  void playVariant(VisualVariant v,uint32_t now){variant_.start(v,now);}
   // Full-screen cards over the scene (PSRAM framebuffer, allocated on first
   // use). Any button closes them; they also time out. False if unavailable.
   bool showStatus(const StatusCardModel& model,uint32_t now);
@@ -31,7 +34,7 @@ class DisplayManager {
   uint16_t* region_=nullptr; // allocated once, fixed full sprite canvas
   uint16_t* window_=nullptr; // allocated once, window frame + glass
   uint16_t* effect_buf_=nullptr; // allocated once, effect region
-  Pcg32 random_{42,54};PetVisualAnimation visual_;
+  Pcg32 random_{42,54};PetVisualAnimation visual_;VariantPlayer variant_;
   WindowWeather weather_;ReactionEffect effect_;
   Backdrop backdrop_=Backdrop::Day,drawnBackdrop_=Backdrop::Day;
   bool windowValid_=true;

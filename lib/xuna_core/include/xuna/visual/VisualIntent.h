@@ -17,6 +17,18 @@ enum class VisualIntent : uint8_t {
   Unknown = 255
 };
 
+// Track A (2026-10-24): short expressive variants played over the current
+// pose (option A: expression only; the learner still picks idle/happy/curious).
+// Order matches the asset (tools/generate_track_a.py). Append only.
+enum class VisualVariant : uint8_t {
+  None = 0,
+  LookAround,   // explore drive / anticipating the owner (loop)
+  YawnStretch,  // going to rest or waking up (one-shot)
+  BouncePlay,   // play drive behind a happy choice (loop)
+  GreetNuzzle,  // the owner is back after a while (one-shot)
+};
+constexpr uint8_t kVisualVariantCount = 4;
+
 struct ExpressionMap {
   VisualIntent intent;
   uint8_t minStage;

@@ -97,6 +97,7 @@ struct LifeCoreStepOutput {
   uint8_t decisionContext = 0;     // LearnInteraction of the pending decision
   uint8_t decisionDayPart = 0;     // 0 = unknown; 1–4 morning…night
   uint8_t traitsConsolidated = 0;  // personality traits moved (TraitConsolidated; journal)
+  VisualVariant variant = VisualVariant::None;  // Track A variant started this step
 };
 
 // Learner day-part index (plan §9.2): 0 unknown, 1 morning, 2 afternoon,
@@ -157,6 +158,8 @@ class LifeCore {
     needs_.reset(now);
     mood_.reset();
     personality_.begin(now);
+    variant_ = VisualVariant::None;
+    variantActivity_ = Activity::Idle;
     learner_.invalidate();
     for (uint8_t i = 0; i < kStatedHistory; ++i) statedIds_[i] = 0;
     statedNext_ = 0;
@@ -193,11 +196,14 @@ class LifeCore {
     const uint8_t count = input.eventCount > kMaxEvents ? kMaxEvents
                                                          : input.eventCount;
     bool owner = false;
+    stepVariant_ = VisualVariant::None;
     for (uint8_t i = 0; i < count; ++i) {
       if (!input.events) break;
       // Everything except XUNA's own idle choice comes from the owner.
       const bool fromOwner = input.events[i].kind != LifeCoreEventKind::Spontaneous;
-      if (fromOwner) personality_.ownerInput(input.now);
+      // The owner is back after a while: a warm greeting (Track A).
+      if (fromOwner && personality_.ownerInput(input.now))
+        offerVariant(VisualVariant::GreetNuzzle);
       process(input.events[i], input.now, signals, output);
       if (fromOwner) owner = true;
     }
@@ -208,6 +214,19 @@ class LifeCore {
     personality_.step(input.now, activity_.state(), needs_.state().energy);
     output.traitsConsolidated = personality_.takeShifts();
     syncPersonality();
+    // Going to rest or waking up: a yawn and a stretch (Track A).
+    const bool restBefore = variantActivity_ == Activity::Resting ||
+                            variantActivity_ == Activity::Sleeping;
+    const bool restNow = activity_.state() == Activity::Resting ||
+                         activity_.state() == Activity::Sleeping;
+    if (restBefore != restNow && (restNow || activity_.state() == Activity::Idle))
+      offerVariant(VisualVariant::YawnStretch);
+    variantActivity_ = activity_.state();
+    output.variant = stepVariant_;
+    if (stepVariant_ != VisualVariant::None) {
+      variant_ = stepVariant_;
+      personality_.expressed(stepVariant_);  // only the variant really shown
+    }
     // An action visual lasts only while its activity does (e.g. Reacting
     // timing out to Idle falls back to the activity visual).
     if (activity_.state() != lastVisualActivity_)
@@ -257,6 +276,13 @@ class LifeCore {
     personality_.forget();
     syncPersonality();
     return true;
+  }
+
+  // Track A: the variant to play, once (the display adapter takes it).
+  VisualVariant takeVariant() {
+    const VisualVariant v = variant_;
+    variant_ = VisualVariant::None;
+    return v;
   }
 
   // True while the owner can still react to the last shown decision.
@@ -353,7 +379,20 @@ class LifeCore {
         learner_.choose(interaction, dayPart, id, mask, random_);
     ActionId action = ActionId::Idle;
     if (decision.id == 0 || !learnActionId(decision.action, action)) return;
+    // Track A (option A): drives choose *how* the learner's choice looks,
+    // never the choice. Checked before acting, which satisfies drives.
+    const DriveState& drives = personality_.drives().state();
+    VisualVariant flavour = VisualVariant::None;
+    if (action == ActionId::Idle && drives.explore >= kExploreVariant)
+      flavour = VisualVariant::LookAround;
+    // Play only grows while energy ≥ half, which awake XUNA keeps for about
+    // 30 min, so it rarely passes ¼ alone; a fresh joy (just petted) bounces too.
+    if (action == ActionId::Happy &&
+        (drives.play >= kPlayVariant ||
+         personality_.affect().state().emotionValence >= kJoyVariant))
+      flavour = VisualVariant::BouncePlay;
     if (!requestAction(static_cast<uint8_t>(action), 0, now)) return;
+    offerVariant(flavour);
     learner_.show(decision, now);
     personality_.shown(decision.action, static_cast<uint8_t>(interaction),
                        decision.explore, decision.predictedQ16);
@@ -397,6 +436,7 @@ class LifeCore {
     if (!requestAction(static_cast<uint8_t>(ActionId::Curious), 0, now)) return;
     anticipatedKey_ = key;
     output.anticipated = true;
+    offerVariant(VisualVariant::LookAround);  // looking out for the owner
   }
 
   uint8_t allowedMask(MonoMs now) const {
@@ -450,6 +490,22 @@ class LifeCore {
     statedNext_ = static_cast<uint8_t>((statedNext_ + 1U) % kStatedHistory);
     output.statedApplied = true;
     output.persistRequested = commit_ == 0;
+  }
+
+  // One variant per step; a greeting beats a yawn, which beats a flavour.
+  void offerVariant(VisualVariant v) {
+    if (v == VisualVariant::None || rank(v) <= rank(stepVariant_)) return;
+    stepVariant_ = v;
+  }
+  static uint8_t rank(VisualVariant v) {
+    switch (v) {
+      case VisualVariant::GreetNuzzle: return 3;
+      case VisualVariant::YawnStretch: return 2;
+      case VisualVariant::LookAround:
+      case VisualVariant::BouncePlay: return 1;
+      case VisualVariant::None: break;
+    }
+    return 0;
   }
 
   // PE-3: keep section 5 of the RAM snapshot equal to the personality, so
@@ -511,6 +567,12 @@ class LifeCore {
   Mood mood_;
   Personality personality_;
   uint32_t syncedRevision_ = 0xFFFFFFFFU;
+  static constexpr uint16_t kExploreVariant = 32768;  // explore ≥ ½ looks around [P]
+  static constexpr uint16_t kPlayVariant = 16384;     // play ≥ ¼ bounces [P]
+  static constexpr int16_t kJoyVariant = 4096;        // or emotion ≥ 0.25 [P]
+  VisualVariant variant_ = VisualVariant::None;      // latched until taken
+  VisualVariant stepVariant_ = VisualVariant::None;
+  Activity variantActivity_ = Activity::Idle;        // activity at the last step
   ClockModel clock_;
   MonoMs lastNow_ = 0;
   uint64_t mono64_ = 0;
