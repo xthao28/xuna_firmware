@@ -118,6 +118,7 @@ Added CRC32, 64-byte IdentityRecord codec and pure IdentityService with staged p
 Owner requested displaying the provided concept as one static image. Standard T-Display-S3 LCD Setup206/ST7789, parallel GPIO mapping, framework/driver pins and rotation 1 remain unchanged: physical 170×320, logical 320×170 landscape. PCB revision is still unknown. The PNG is a concept scene, not an animation sprite.
 
 - Source: `assets/source/xuna_and_bg.png` (1721×914, owner-provided).
+- 2026-10-24: the owner removed `assets/source/xuna_and_bg.png`, `assets/source/xuna-pet.png` and `assets/generated/xuna_scene_rgb565.png` (still in Git history before `b16f3b3`). `tools/convert_scene.py` now needs `--source` or a restored file; `tools/generate_pet_scene.py` uses `xuna-emotion-sheet-v2.png`, which is kept.
 - Converter: `tools/convert_scene.py`, using existing Pillow; no dependency install.
 - Output: `include/assets/XunaScene.h`, `src/assets/XunaScene.cpp`, and preview/metadata under `assets/generated/`.
 - Regenerate: `python3 firmware/tools/convert_scene.py` from root, or `python3 tools/convert_scene.py` from firmware. Replace the source file and rerun; `--source` can select another input. Fit by uniform contain scale with nearest-neighbor and integer pixel rounding; pad if aspect differs, never crop. Target dimensions must match static assertions for this display.
