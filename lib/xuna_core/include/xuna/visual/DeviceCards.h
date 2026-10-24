@@ -50,6 +50,22 @@ inline const char* moodName(MoodWord mood) {
   }
   return "?";
 }
+inline const char* traitName(TraitWord word) {
+  switch (word) {
+    case TraitWord::Balanced: return "cân bằng";
+    case TraitWord::Curious: return "tò mò";
+    case TraitWord::Composed: return "điềm tĩnh";
+    case TraitWord::Affectionate: return "quấn chủ";
+    case TraitWord::Independent: return "tự lập";
+    case TraitWord::Playful: return "ham chơi";
+    case TraitWord::Quiet: return "trầm";
+    case TraitWord::Lively: return "lanh lợi";
+    case TraitWord::Unhurried: return "thong thả";
+    case TraitWord::Sensitive: return "nhạy cảm";
+    case TraitWord::Carefree: return "vô tư";
+  }
+  return "?";
+}
 inline const char* stateName(PetState state) {
   switch (state) {
     case PetState::Idle: return "thư giãn";
@@ -81,7 +97,8 @@ struct StatusCardModel {
   uint32_t activeSeconds = 0;
   uint8_t energyPct = 0;
   PetState state = PetState::Idle;
-  ActionId quiet = ActionId::Idle, play = ActionId::Idle, greeting = ActionId::Idle;
+  ActionId quiet = ActionId::Idle, greeting = ActionId::Idle;
+  TraitWord trait = TraitWord::Balanced;  // derived personality label (PE-2)
   uint32_t feedbackCount = 0;
   bool arrivalKnown = false, weekend = false;
   uint8_t arrivalHour = 0, arrivalMinute = 0;
@@ -99,7 +116,6 @@ inline StatusCardModel makeStatusCard(const LifeCore& core, uint16_t energy, Pet
   m.energyPct = uint8_t(uint32_t(energy) * 100 / 65535);
   m.state = state;
   learnActionId(core.preferred(LearnInteraction::QuietRequest), m.quiet);
-  learnActionId(core.preferred(LearnInteraction::PlayRequest), m.play);
   learnActionId(core.preferred(LearnInteraction::ButtonGreeting), m.greeting);
   m.feedbackCount = s.counters.feedbackCount;
   const uint64_t mono = core.mono64();
@@ -110,6 +126,7 @@ inline StatusCardModel makeStatusCard(const LifeCore& core, uint16_t energy, Pet
   m.arrivalKnown = HabitPredictor::usualArrival(s.habit, m.weekend, m.arrivalHour, m.arrivalMinute);
   if (petId) hexPrefix(petId, 4, m.shortId);
   m.mood = Expression::moodWord(core.personality().affect().state());
+  m.trait = Expression::traitWord(core.personality().genome());
   return m;
 }
 
@@ -136,11 +153,14 @@ inline void renderStatusCard(Canvas& c, const CardFonts& f, const StatusCardMode
              unsigned(m.arrivalMinute));
   else
     snprintf(arrival, sizeof(arrival), "chưa rõ");
-  const char* labels[8] = {"Đã sống", "Năng lượng", "Bây giờ", "Đã học từ phản ứng",
-                           "Lúc yên tĩnh thích", "Lúc chơi thích", "Được chào thì",
+  // "Đã thức" = active lifetime (powered on), not age since hatch. The play
+  // preference cell gave way to the personality label: play is taught only
+  // through the app, which no longer rates (D6 revised).
+  const char* labels[8] = {"Đã thức", "Năng lượng", "Bây giờ", "Đã học từ phản ứng",
+                           "Lúc yên tĩnh thích", "Tính cách", "Được chào thì",
                            m.weekend ? "Cuối tuần chủ hay về" : "Chủ hay về"};
   const char* values[8] = {lifetime, energy, stateName(m.state), learned,
-                           actionName(m.quiet), actionName(m.play), actionName(m.greeting),
+                           actionName(m.quiet), traitName(m.trait), actionName(m.greeting),
                            arrival};
   for (uint8_t i = 0; i < 8; ++i) {
     const int x = i < 4 ? 12 : 166, y = 38 + (i % 4) * 33;

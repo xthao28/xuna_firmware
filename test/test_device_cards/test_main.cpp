@@ -88,6 +88,7 @@ void status_card_from_a_fresh_core_and_render_bounds() {
   TEST_ASSERT_EQUAL_STRING("d945c770", m.shortId);
   TEST_ASSERT_EQUAL_UINT8(uint8_t(PetState::Curious), uint8_t(m.state));
   TEST_ASSERT_EQUAL_UINT8(uint8_t(MoodWord::Calm), uint8_t(m.mood));  // neutral, unseeded
+  TEST_ASSERT_EQUAL_UINT8(uint8_t(TraitWord::Balanced), uint8_t(m.trait));
   TEST_ASSERT_EQUAL_STRING("", makeStatusCard(core, 0, PetState::Idle, nullptr).shortId);
 
   Canvas c{pixels, 320, 170};
@@ -101,6 +102,8 @@ void status_card_from_a_fresh_core_and_render_bounds() {
   TEST_ASSERT_EQUAL_STRING("đang ngủ", stateName(PetState::Sleep));
   TEST_ASSERT_EQUAL_STRING("hơi buồn", moodName(MoodWord::Low));
   TEST_ASSERT_EQUAL_STRING("bình yên", moodName(MoodWord::Calm));
+  TEST_ASSERT_EQUAL_STRING("ham chơi", traitName(TraitWord::Playful));
+  TEST_ASSERT_EQUAL_STRING("vô tư", traitName(TraitWord::Carefree));
 }
 
 bool checker(const void*, int x, int y) { return (x + y) % 2 == 0; }

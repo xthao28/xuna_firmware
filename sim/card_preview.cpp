@@ -44,7 +44,7 @@ int main(int argc, char** argv) {
   m.energyPct = 72;
   m.state = xuna::PetState::Happy;
   m.quiet = xuna::ActionId::Happy;
-  m.play = xuna::ActionId::Curious;
+  m.trait = xuna::TraitWord::Unhurried;  // the widest trait word
   m.greeting = xuna::ActionId::Idle;
   m.feedbackCount = 12;
   m.arrivalKnown = true;

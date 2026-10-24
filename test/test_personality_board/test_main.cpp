@@ -186,6 +186,28 @@ void board_routine_waits_by_the_pets_temperament() {
   TEST_ASSERT_EQUAL_UINT32((wait + 999) / 1000 * 1000, first);
 }
 
+void trait_word_names_the_most_pronounced_tendency() {
+  TemperamentState g;
+  TEST_ASSERT_EQUAL_UINT8(uint8_t(TraitWord::Balanced), uint8_t(Expression::traitWord(g)));
+  g.offset[uint8_t(TraitId::Tempo)] = Expression::kPronounced - 1;  // below: still balanced
+  TEST_ASSERT_EQUAL_UINT8(uint8_t(TraitWord::Balanced), uint8_t(Expression::traitWord(g)));
+  g.offset[uint8_t(TraitId::Tempo)] = -Expression::kPronounced;
+  TEST_ASSERT_EQUAL_UINT8(uint8_t(TraitWord::Unhurried), uint8_t(Expression::traitWord(g)));
+  g.offset[uint8_t(TraitId::Sociability)] = 2000;
+  TEST_ASSERT_EQUAL_UINT8(uint8_t(TraitWord::Affectionate), uint8_t(Expression::traitWord(g)));
+  g.offset[uint8_t(TraitId::Curiosity)] = -2000;  // tie: the earlier trait wins
+  TEST_ASSERT_EQUAL_UINT8(uint8_t(TraitWord::Composed), uint8_t(Expression::traitWord(g)));
+  g.offset[uint8_t(TraitId::Boredom)] = 9000;     // not a shown trait
+  TEST_ASSERT_EQUAL_UINT8(uint8_t(TraitWord::Composed), uint8_t(Expression::traitWord(g)));
+
+  BoardLab lab(7);  // the board pet: its innate label, from the durable seed
+  bootMigrated(lab);
+  TemperamentState innate;
+  Temperament::seed(innate, lab.identity().record().seed);
+  TEST_ASSERT_EQUAL_UINT8(uint8_t(Expression::traitWord(innate)),
+                          uint8_t(Expression::traitWord(lab.core().personality().genome())));
+}
+
 void setUp() {}
 void tearDown() {}
 
@@ -199,5 +221,6 @@ int main() {
   RUN_TEST(mood_words_follow_mood);
   RUN_TEST(spontaneous_wait_follows_temperament);
   RUN_TEST(board_routine_waits_by_the_pets_temperament);
+  RUN_TEST(trait_word_names_the_most_pronounced_tendency);
   return UNITY_END();
 }

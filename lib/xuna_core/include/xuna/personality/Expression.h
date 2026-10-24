@@ -33,6 +33,20 @@ struct ExpressionStyle {
 // Coarse word for the mood (status card). Order is append only.
 enum class MoodWord : uint8_t { Calm = 0, Glad, Joyful, Low, Sad, Bored };
 
+// Derived personality label (P-D2: labels are inferred, never a preset):
+// the most pronounced of curiosity, sociability, playfulness, tempo and
+// sensitivity (innate + learned), by sign; Balanced when none reaches
+// Expression::kPronounced. Status card now, PetSelf for the LLM in PE-4b.
+// Order is append only.
+enum class TraitWord : uint8_t {
+  Balanced = 0,
+  Curious, Composed,       // curiosity + / −
+  Affectionate, Independent,  // sociability + / −
+  Playful, Quiet,          // playfulness + / −
+  Lively, Unhurried,       // tempo + / −
+  Sensitive, Carefree,     // sensitivity + / −
+};
+
 class Expression {
  public:
   static constexpr uint16_t kFramePeriodMs = 100;   // PetVisualAnimation default
@@ -42,6 +56,7 @@ class Expression {
   static constexpr int16_t kGlad = 983;             // mood valence 0.06
   static constexpr int16_t kJoyful = 4096;          // 0.25
   static constexpr int16_t kBored = -1638;          // mood arousal −0.1
+  static constexpr int16_t kPronounced = 819;       // |trait| 0.05: a visible tendency
   static constexpr int32_t kWaitMs = 60000;            // the routine before PE-2b
   static constexpr int32_t kTemperamentWaitMs = 9000;  // ±15 % of 60 s
 
@@ -72,6 +87,23 @@ class Expression {
     const int32_t eager = limit((int32_t(Temperament::effective(genome, TraitId::Curiosity)) +
                                  Temperament::effective(genome, TraitId::Playfulness)) / 2);
     return static_cast<uint32_t>(kWaitMs - kTemperamentWaitMs * eager / kFullEffect);
+  }
+
+  static TraitWord traitWord(const TemperamentState& genome) {
+    static const TraitId kShown[] = {TraitId::Curiosity, TraitId::Sociability,
+                                     TraitId::Playfulness, TraitId::Tempo,
+                                     TraitId::Sensitivity};
+    int32_t best = kPronounced - 1;
+    TraitWord word = TraitWord::Balanced;
+    for (uint8_t i = 0; i < 5; ++i) {
+      const int32_t v = Temperament::effective(genome, kShown[i]);
+      const int32_t size = v < 0 ? -v : v;
+      if (size > best) {  // ties keep the earlier trait
+        best = size;
+        word = static_cast<TraitWord>(1 + 2 * i + (v < 0 ? 1 : 0));
+      }
+    }
+    return word;
   }
 
   static MoodWord moodWord(const AffectState& a) {
