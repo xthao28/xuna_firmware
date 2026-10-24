@@ -53,8 +53,20 @@ bool DisplayManager::begin() {
                 unsigned(sizeof(scene::kBackground)+sizeof(scene::kFrames)+sizeof(scene::kWindows)+sizeof(scene::kEffects)));
   return true;
 }
+// The LED driver steps down one level per short low pulse and wraps from 1
+// to 16 (LilyGO factory example); a low longer than 2.5 ms switches it off.
+void DisplayManager::setBacklight(uint8_t level){
+  if(level<1||level>BacklightDimmer::kMax||level==backlightHw_)return;
+  const unsigned pulses=(BacklightDimmer::kMax+backlightHw_-level)%BacklightDimmer::kMax;
+  for(unsigned i=0;i<pulses;++i){
+    digitalWrite(kBacklightPin,LOW);delayMicroseconds(1);
+    digitalWrite(kBacklightPin,HIGH);delayMicroseconds(1);
+  }
+  backlightHw_=level;
+}
 void DisplayManager::update(uint32_t now,PetState state){
   if(!region_)return;
+  setBacklight(backlight_.update(now,state,cardOpen()));
   if(cardOpen()){
     if(uint32_t(now-cardAt_)>=cardUntil_)closeCard();
     return; // nothing else draws over a card

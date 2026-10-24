@@ -12,4 +12,8 @@ constexpr uint32_t kDiagnosticsMs = 5000;
 // the CPU waits for interrupts instead of spinning (~25,000 passes/s before).
 // Frames are 85–115 ms and buttons debounce over 30 ms, so nothing visible changes.
 constexpr uint32_t kLoopPeriodMs = 10;
+// CPU clock (heat, second pass): the CPU idles most of each pass, and idle
+// power scales with the clock. 80 MHz is the lowest that keeps BLE; a frame
+// still draws in well under its 85–115 ms period. The parity env keeps 240.
+constexpr uint32_t kCpuMhz = 80;
 }

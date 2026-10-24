@@ -98,7 +98,10 @@ class BleManager {
     personality_=service->createCharacteristic("7a6e000e-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ);
     {uint8_t idle[DeviceProof::kResponseSize]={1,uint8_t(DeviceProof::kResponseSize)};proofChar_->setValue(idle,sizeof(idle));}
     publish(0,0,0,PetState::Idle,0);service->start();
-    auto* adv=BLEDevice::getAdvertising();adv->addServiceUUID(kService);adv->setScanResponse(true);adv->start();return true;
+    auto* adv=BLEDevice::getAdvertising();adv->addServiceUUID(kService);adv->setScanResponse(true);
+    // Heat: advertise every 100–152.5 ms (0.625 ms units), not the library's
+    // 20–40 ms; the app scans for up to 12 s, so it still finds XUNA quickly.
+    adv->setMinInterval(0xA0);adv->setMaxInterval(0xF4);adv->start();return true;
   }
   // All life/learning decisions belong to the pure adapter; callbacks only queue bytes.
   bool update(V1LifeCoreAdapter& adapter,const IdentityRecord* identity,IDeviceSigner& signer,uint32_t now,bool ready) {

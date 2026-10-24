@@ -1,5 +1,6 @@
 #pragma once
 #include <cstring>
+#include <esp32-hal-cpu.h>
 #include <esp_random.h>
 #include <mbedtls/ecdsa.h>
 #include <mbedtls/ecp.h>
@@ -12,6 +13,15 @@ namespace xuna {
 // would silently change the device identity the cloud pinned (TOFU).
 // Known limit: flash encryption is off on the prototype, so a physical
 // attacker with USB access can read NVS.
+// Heat: the board idles at a low CPU clock; ECDSA runs at full speed so a
+// signature does not stall the animation (~3x longer at 80 MHz). The APB
+// clock stays 80 MHz either way, so BLE is unaffected.
+struct CpuBoost {
+  const uint32_t was=getCpuFrequencyMhz();
+  CpuBoost(){if(was<240)setCpuFrequencyMhz(240);}
+  ~CpuBoost(){if(was<240)setCpuFrequencyMhz(was);}
+  CpuBoost(const CpuBoost&)=delete;CpuBoost& operator=(const CpuBoost&)=delete;
+};
 class DeviceKey: public IDeviceSigner {
   mbedtls_ecp_group group_;
   mbedtls_mpi secret_;
@@ -24,7 +34,7 @@ class DeviceKey: public IDeviceSigner {
   ~DeviceKey(){mbedtls_mpi_free(&secret_);mbedtls_ecp_group_free(&group_);}
   // Call after BLE init (RF on → esp_fill_random is a true RNG).
   Result begin(NvsSnapshotStore& store){
-    ready_=false;
+    const CpuBoost boost;ready_=false;
     if(mbedtls_ecp_group_load(&group_,MBEDTLS_ECP_DP_SECP256R1))return Result::CryptoFailed;
     uint8_t raw[32];Result result=Result::Loaded;
     const auto load=store.readDeviceKey(raw);
@@ -56,6 +66,7 @@ class DeviceKey: public IDeviceSigner {
   const uint8_t* publicKey() const override { return public_; }
   bool sign(const uint8_t digest[32],uint8_t signature[64]) override {
     if(!ready_)return false;
+    const CpuBoost boost;
     mbedtls_mpi r,s;mbedtls_mpi_init(&r);mbedtls_mpi_init(&s);
     const bool ok=!mbedtls_ecdsa_sign_det_ext(&group_,&r,&s,&secret_,digest,32,MBEDTLS_MD_SHA256,random,nullptr)&&
         !mbedtls_mpi_write_binary(&r,signature,32)&&!mbedtls_mpi_write_binary(&s,signature+32,32);

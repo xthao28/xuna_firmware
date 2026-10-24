@@ -18,7 +18,7 @@ Replace the port with the detected device. M01 was uploaded on 2026-10-11 after 
 ## Configuration and official sources
 
 - `espressif32@6.5.0` / Arduino ESP32 2.0.14, matching the vendor's baseline.
-- PlatformIO's built-in `esp32-s3-devkitc-1` provides the MCU target only. Explicit overrides match the vendor board manifest: 240 MHz CPU, 80 MHz QIO Flash, `qio_opi` memory, 16 MB Flash and `default_16MB.csv` partitions. The generic board name does **not** define the LCD pins.
+- PlatformIO's built-in `esp32-s3-devkitc-1` provides the MCU target only. Explicit overrides match the vendor board manifest: 240 MHz CPU (the production firmware drops to 80 MHz at runtime for heat, `kCpuMhz`; the parity env stays at 240), 80 MHz QIO Flash, `qio_opi` memory, 16 MB Flash and `default_16MB.csv` partitions. The generic board name does **not** define the LCD pins.
 - `bodmer/TFT_eSPI@2.5.43`, with its bundled **Setup206** force-included for all translation units and `USER_SETUP_LOADED`. No dependency files need manual editing.
 - Native USB CDC/JTAG enabled; Serial 115200. Application does not wait for a serial host. Standalone boot still needs physical verification.
 - LCD uses **8-bit parallel**, not SPI: D0–D7 = 39,40,41,42,45,46,47,48; CS=6, DC=7, RST=5, WR=8, RD=9. GPIO15 enables power; GPIO38 controls backlight. Buttons GPIO0/GPIO14 are active-low with pull-ups. GPIO0 held during reset enters download mode.

@@ -4,6 +4,7 @@
 #include <xuna/visual/DeviceCards.h>
 #include <xuna/visual/SceneEffects.h>
 #include <xuna/visual/VariantPlayer.h>
+#include <xuna/visual/Backlight.h>
 namespace xuna {
 class DisplayManager {
  public:
@@ -25,11 +26,13 @@ class DisplayManager {
   uint32_t draws() const {return draws_;}
   uint32_t maxDrawUs() const {return maxDrawUs_;}
   uint32_t maxSceneUs() const {return maxSceneUs_;}
+  uint8_t backlight() const {return backlightHw_;}
  private:
   void drawWindow();
   void drawEffect(const EffectSample& sample);
   bool ensureCardBuffers();
   void openCard(uint32_t now,uint32_t durationMs);
+  void setBacklight(uint8_t level);
   TFT_eSPI lcd_;
   uint16_t* region_=nullptr; // allocated once, fixed full sprite canvas
   uint16_t* window_=nullptr; // allocated once, window frame + glass
@@ -44,5 +47,7 @@ class DisplayManager {
   EffectSample drawnEffect_{EffectKind::None,0,false};
   uint8_t lastFrame_=255;
   uint32_t draws_=0,maxDrawUs_=0,maxSceneUs_=0;
+  BacklightDimmer backlight_;
+  uint8_t backlightHw_=BacklightDimmer::kMax; // driver level after power-up
 };
 }

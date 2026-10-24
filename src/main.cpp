@@ -119,8 +119,10 @@ const char* recoveryName(xuna::LoadResult result) {
 }
 }
 void setup() {
+  setCpuFrequencyMhz(xuna::kCpuMhz);  // heat: before anything times itself
   Serial.begin(115200); // No wait for USB host/Serial Monitor.
   Serial.printf("\nXUNA %s | MVP M05 | standard T-Display-S3 LCD\n", xuna::kFirmwareVersion);
+  Serial.printf("cpu_mhz=%u\n", unsigned(getCpuFrequencyMhz()));
   Serial.printf("flash=%u bytes psram_detected=%s\n", ESP.getFlashChipSize(), psramFound() ? "yes" : "no");
   const uint32_t psramChipBytes = psramFound() ? esp_spiram_get_size() : 0;
   Serial.printf("psram_chip=%u bytes\n", psramChipBytes);
@@ -265,7 +267,8 @@ void loop() {
     Serial.printf("scene=animated state=%s loop_gap_max_us=%u draws=%u draw_max_us=%u scene_max_us=%u\n",
                   (animation.state() == xuna::PetState::Idle ? "idle" : (animation.state() == xuna::PetState::Happy ? "happy" : (animation.state() == xuna::PetState::Sleep ? "sleep" : "curious"))), maxLoopGapUs, display.draws(), display.maxDrawUs(), display.maxSceneUs());
     // Heat check: loops per window and the chip's own sensor (not the board surface).
-    Serial.printf("power loops=%u chip_temp_c=%.1f\n", unsigned(loops), temperatureRead());
+    Serial.printf("power loops=%u chip_temp_c=%.1f cpu_mhz=%u backlight=%u\n", unsigned(loops), temperatureRead(),
+                  unsigned(getCpuFrequencyMhz()), unsigned(display.backlight()));
     logNeeds("needs", now);
     logMemory(); diagnosticsAt = now;
     maxLoopGapUs = 0; loops = 0;
