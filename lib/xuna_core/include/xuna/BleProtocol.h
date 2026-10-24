@@ -13,9 +13,12 @@ struct BleCommand {
 // only when `statedPreference` is set (S26 enhanced production adapter).
 // Baseline v1 adapters keep opcode 6 unknown (error 3). Source 3 (voice)
 // stays invalid until D16. Context/action repertoire checks belong to the core.
+// Opcode 1 args 4–7 (Track A variant preview, capability byte 4 bits 4–7) are
+// valid only when `variantPreview` is set; v1 keeps 0–3.
 inline BleCommand parseCommand(const uint8_t* b,size_t n,
                                bool statedPreference=false,
-                               bool timeSync=false,bool hatch=false) {
+                               bool timeSync=false,bool hatch=false,
+                               bool variantPreview=false) {
   BleCommand c; if(n>=6)c.id=LifeEngine::get32(b+2);
   if(n!=8&&n!=12&&(!timeSync||n!=16)){c.error=2;return c;}
   if(b[0]!=1){c.error=1;return c;}
@@ -33,7 +36,7 @@ inline BleCommand parseCommand(const uint8_t* b,size_t n,
     c.source=b[6];c.arg=0;c.utcSeconds=LifeEngine::get32(b+8);
     c.tzOffsetMin=static_cast<int16_t>(uint16_t(b[12])|(uint16_t(b[13])<<8));
   }
-  if((c.opcode==1&&(c.arg>3||c.source))||(c.opcode==2&&(c.arg>1||c.source))||(c.opcode==3&&(c.arg>1||c.source<1||c.source>2||!c.target))||(c.opcode==4&&(c.arg||c.source)))c.error=4;
+  if((c.opcode==1&&(c.arg>(variantPreview?7:3)||c.source))||(c.opcode==2&&(c.arg>1||c.source))||(c.opcode==3&&(c.arg>1||c.source<1||c.source>2||!c.target))||(c.opcode==4&&(c.arg||c.source)))c.error=4;
   if(stated&&(c.arg>1||c.source!=2||b[10]||b[11]))c.error=4;
   if(sync&&(c.source!=1||b[7]||!c.utcSeconds||c.tzOffsetMin < -840||
             c.tzOffsetMin > 840||b[14]||b[15]))c.error=4;

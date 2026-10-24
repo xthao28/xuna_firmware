@@ -285,6 +285,12 @@ class LifeCore {
     return v;
   }
 
+  // Track A preview from the app (opcode 1, args 4–7): shown only. Needs,
+  // drives, personality, learning and the snapshot stay untouched.
+  void previewVariant(VisualVariant v) {
+    if (v != VisualVariant::None) variant_ = v;
+  }
+
   // True while the owner can still react to the last shown decision.
   bool reactionOpen(MonoMs now) const { return learner_.reactionOpen(now); }
 

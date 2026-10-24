@@ -503,8 +503,52 @@ void time_sync_accepts_frozen_frame_and_rejects_rollback() {
       4,rig.send("01 05 79 56 34 12 01 00 98 ef 53 65 a4 01 00 00",3000,id));
 }
 
+// Track A preview (opcode 1 args 4-7): shown only, nothing in life changes.
+void enhanced_variant_preview_is_shown_only() {
+  Rig rig(false, true);
+  rig.boot(1000);
+  uint32_t id = 0;
+  rig.adapter.tick(2000);
+  rig.core.takeVariant();
+  const Activity activity = rig.adapter.last().activity;
+  const uint16_t energy = rig.adapter.last().needs.energy;
+  const uint32_t evidence = rig.core.personality().evidence();
+  const uint32_t feedback = rig.core.snapshot().counters.feedbackCount;
+  const VisualVariant expected[] = {VisualVariant::LookAround, VisualVariant::YawnStretch,
+                                    VisualVariant::BouncePlay, VisualVariant::GreetNuzzle};
+  uint8_t bytes[8] = {1, 1, 0, 0, 0, 0, 0, 0};
+  for (uint8_t arg = 4; arg <= 7; ++arg) {
+    bytes[2] = static_cast<uint8_t>(10 + arg);
+    bytes[6] = arg;
+    TEST_ASSERT_EQUAL_UINT8(0, rig.adapter.handle(bytes, 8, 3000 + arg, true, id));
+    TEST_ASSERT_EQUAL_UINT8(uint8_t(expected[arg - 4]), uint8_t(rig.core.takeVariant()));
+  }
+  TEST_ASSERT_EQUAL_UINT8(uint8_t(activity), uint8_t(rig.adapter.last().activity));
+  TEST_ASSERT_EQUAL_UINT16(energy, rig.adapter.last().needs.energy);
+  TEST_ASSERT_EQUAL_UINT32(evidence, rig.core.personality().evidence());
+  TEST_ASSERT_EQUAL_UINT32(feedback, rig.core.snapshot().counters.feedbackCount);
+  // A replayed request answers from the cache and does not replay the variant.
+  TEST_ASSERT_EQUAL_UINT8(0, rig.adapter.handle(bytes, 8, 4000, true, id));
+  TEST_ASSERT_EQUAL_UINT8(uint8_t(VisualVariant::None), uint8_t(rig.core.takeVariant()));
+  TEST_ASSERT_EQUAL_UINT8(4, rig.send("01 01 20 00 00 00 08 00", 5000, id));
+  TEST_ASSERT_EQUAL_UINT8(4, rig.send("01 01 21 00 00 00 06 01", 5001, id));
+  TEST_ASSERT_EQUAL_UINT8(0, rig.send("01 01 22 00 00 00 03 00", 5002, id));  // v1 curious unchanged
+}
+
+// The baseline v1 adapter keeps animation args 0-3.
+void baseline_rejects_variant_preview() {
+  Rig rig;
+  putS01Pet(rig.store);
+  rig.boot(1000);
+  uint32_t id = 0;
+  TEST_ASSERT_EQUAL_UINT8(4, rig.send("01 01 30 00 00 00 06 00", 2000, id));
+  TEST_ASSERT_EQUAL_UINT8(uint8_t(VisualVariant::None), uint8_t(rig.core.takeVariant()));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
+  RUN_TEST(enhanced_variant_preview_is_shown_only);
+  RUN_TEST(baseline_rejects_variant_preview);
   RUN_TEST(time_sync_accepts_frozen_frame_and_rejects_rollback);
 RUN_TEST(pet_right_after_a_reaction_teaches_with_reaction_weight);
 RUN_TEST(shoo_right_after_a_reaction_teaches_negative_then_idles);

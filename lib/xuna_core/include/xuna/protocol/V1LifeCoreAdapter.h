@@ -42,6 +42,18 @@ class V1LifeCoreAdapter {
     kNotReady = 7,
     kExpired = 8,
   };
+  // Opcode 1 args 4–7: Track A variant preview (enhanced adapter only).
+  static constexpr uint8_t kVariantPreviewBase = 4;
+  // Wire order, not the enum order (explicit so a reorder cannot change it).
+  static VisualVariant previewVariant(uint8_t arg) {
+    switch (arg) {
+      case 4: return VisualVariant::LookAround;
+      case 5: return VisualVariant::YawnStretch;
+      case 6: return VisualVariant::BouncePlay;
+      case 7: return VisualVariant::GreetNuzzle;
+      default: return VisualVariant::None;
+    }
+  }
   // TimeSync is the only v1 additive command wider than 12 bytes.
   static constexpr size_t kMaxPacket = 16;
   // v1 checkpoint cadence for active lifetime (main.cpp, 5 minutes).
@@ -72,7 +84,7 @@ class V1LifeCoreAdapter {
   // echoed in the status value.
   uint8_t handle(const uint8_t* bytes, size_t size, uint32_t now, bool ready,
                  uint32_t& id) {
-    const BleCommand c = parseCommand(bytes, size, enhancedLearning_, true);
+    const BleCommand c = parseCommand(bytes, size, enhancedLearning_, true, false, enhancedLearning_);
     id = c.id;
     uint8_t result = c.error;
     const int duplicate = size <= kMaxPacket ? cache_.find(bytes, size) : -1;
@@ -237,6 +249,10 @@ class V1LifeCoreAdapter {
   uint8_t dispatch(const BleCommand& c, uint32_t now) {
     switch (c.opcode) {
       case 1:
+        if (c.arg >= kVariantPreviewBase) {
+          core_.previewVariant(previewVariant(c.arg));
+          return kOk;
+        }
         return requestAction(c.arg, now) ? kOk : kBusy;
       case 2: {
         if (c.id >= LifeCore::kLocalDecisionIdBase) return kInvalidArgument;

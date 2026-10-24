@@ -85,7 +85,8 @@ class BleManager {
     auto* service=server->createService(BLEUUID(kService),32);
     auto* caps=service->createCharacteristic("7a6e0002-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ);
     // byte 3 bit 0: Identity V2 device proof (7a6e000d); bit 1: personality projection (7a6e000e).
-    uint8_t b[8]={1,8,0xbf,0x03,15,3,0x60,0x09};caps->setValue(b,sizeof(b));
+    // byte 4 bits 4–7: Track A variant preview (opcode 1 args 4–7).
+    uint8_t b[8]={1,8,0xbf,0x03,0xff,3,0x60,0x09};caps->setValue(b,sizeof(b));
     auto* command=service->createCharacteristic("7a6e0003-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_WRITE);command->setCallbacks(&writeCallbacks_);
     status_=service->createCharacteristic("7a6e0004-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ|BLECharacteristic::PROPERTY_NOTIFY);status_->addDescriptor(new BLE2902());
     lifeStatus_=service->createCharacteristic("7a6e0005-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ);
