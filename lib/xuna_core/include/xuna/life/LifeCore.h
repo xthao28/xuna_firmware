@@ -11,6 +11,7 @@
 #include <xuna/life/LifeFeel.h>
 #include <xuna/life/Needs.h>
 #include <xuna/persist/SnapshotStore.h>
+#include <xuna/personality/Leaning.h>
 #include <xuna/personality/Personality.h>
 #include <xuna/personality/PersonalityCodec.h>
 #include <xuna/time/ClockModel.h>
@@ -141,7 +142,8 @@ class LifeCore {
   // Personality: the pet's IdentityRecord seed (0 = no identity yet, neutral
   // genome), after restore() and before begin(). The restored snapshot's
   // section 5 (PE-3) then brings back what XUNA learned about its character.
-  // Shadow + expression only; it never changes a decision.
+  // It leans XUNA's choices only where learning has no answer (PE-4a,
+  // Leaning.h); a neutral genome leans nowhere.
   void seedPersonality(uint32_t petSeed) {
     personality_.seed(petSeed);
     const SnapshotPersonality& stored = learner_.state().personality;
@@ -303,6 +305,10 @@ class LifeCore {
   const ActivityFsm& activity() const { return activity_; }
   const Personality& personality() const { return personality_; }
 
+  // PE-4a gains (Life Lab compares them; the board keeps the defaults).
+  void setLeaning(const LeaningConfig& config) { leaning_ = config; }
+  const LeaningConfig& leaning() const { return leaning_; }
+
   // Urgent-commit port (plan §9.5). Not owned. Null keeps the legacy
   // apply-then-persistRequested path for adapter-free tests.
   void setCommitter(ISnapshotCommit* commit) { commit_ = commit; }
@@ -381,8 +387,10 @@ class LifeCore {
     // Fine day-part cells are used only with trusted time (Synced or
     // Approximate); otherwise the coarse cell (0) decides and learns.
     const uint8_t dayPart = learnDayPart(clock_.dayPart(mono64_));
+    // PE-4a: the temperament leans the choice where learning has no answer.
+    const V3Leaning lean = Leaning::forChoice(personality_.genome(), interaction, leaning_);
     const V3Decision decision =
-        learner_.choose(interaction, dayPart, id, mask, random_);
+        learner_.choose(interaction, dayPart, id, mask, random_, lean);
     ActionId action = ActionId::Idle;
     if (decision.id == 0 || !learnActionId(decision.action, action)) return;
     // Track A (option A): drives choose *how* the learner's choice looks,
@@ -572,6 +580,7 @@ class LifeCore {
   Needs needs_;
   Mood mood_;
   Personality personality_;
+  LeaningConfig leaning_;
   uint32_t syncedRevision_ = 0xFFFFFFFFU;
   static constexpr uint16_t kExploreVariant = 32768;  // explore ≥ ½ looks around [P]
   static constexpr uint16_t kPlayVariant = 16384;     // play ≥ ¼ bounces [P]

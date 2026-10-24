@@ -67,6 +67,7 @@ class BoardLab {
   // setup(): `now` is millis() at boot (the caller restarts it at 0).
   bool boot(uint32_t now) {
     ram_.reset(new Ram(commit_));
+    ram_->core.setLeaning(leaning_);
     last_ = BootSequence::run(store_, true, ram_->gated, ram_->core,
                               ram_->identity, entropy_, scratch_, now);
     ram_->adapter.begin(now);
@@ -138,6 +139,13 @@ class BoardLab {
     return 16;
   }
 
+  // PE-4a gains for this and every later boot (lab only; the board keeps
+  // the LifeCore defaults).
+  void setLeaning(const LeaningConfig& config) {
+    leaning_ = config;
+    if (ram_) ram_->core.setLeaning(config);
+  }
+
   const BootResult& lastBoot() const { return last_; }
   const LifeSnapshotV2& snapshot() const { return ram_->core.snapshot(); }
   const LifeCore& core() const { return ram_->core; }
@@ -177,6 +185,7 @@ class BoardLab {
   Pcg32 entropy_;  // lab only; the board uses esp_random()
   LifeSnapshotV2 scratch_;
   std::unique_ptr<Ram> ram_;
+  LeaningConfig leaning_;
   BootResult last_;
   uint32_t checkpoints_ = 0;
   uint32_t checkpointFailures_ = 0;

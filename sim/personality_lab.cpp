@@ -4,6 +4,9 @@
 // Host only, lab only; nothing here runs on the board:
 //   c++ -std=c++11 -O2 -Wall -Wextra -Werror -Ilib/xuna_core/include sim/personality_lab.cpp -o personality_lab
 //   ./personality_lab > pe0.txt      (deterministic; runtime goes to stderr)
+//   ./personality_lab leaning        (PE-4a lean sweep alone)
+// Since PE-4a the board's lives lean their untaught choices by temperament
+// (Leaning.h, board defaults); the sweep compares the gains.
 //
 // Every run boots BoardLab (the board's setup()/loop() replica) from a fresh
 // migrated v1 pet and lives `days` local days in 1 s steps. A simulated owner
@@ -67,6 +70,7 @@ struct Life {
   uint32_t petSeed;  // IdentityRecord::seed
   uint32_t shifts, decays, sessions, evidence;
   TemperamentState genome;  // end of life
+  TemperamentState board;   // the board core's own genome (what really leans choices)
 };
 
 struct Run {
@@ -78,6 +82,7 @@ struct Run {
   uint32_t absentFrom;   // owner stops coming from this local day
   uint32_t badDay;       // owner shoos everything on this local day
   ShadowConfig shadow;
+  LeaningConfig leaning;  // PE-4a: the board's defaults unless a sweep changes them
 };
 
 // Owner preference profiles per interaction (quiet, play, greeting);
@@ -139,6 +144,7 @@ bool live(const Run& spec, Life& life) {
   life = Life();
   life.days = spec.days;
   BoardLab lab(spec.entropySeed);
+  lab.setLeaning(spec.leaning);
   lab.store().seedV1(xuna_fixture::fresh, sizeof(xuna_fixture::fresh));
   if (!lab.boot(0)) return false;
   life.bootFingerprint = lab.core().learner().fingerprint();
@@ -237,6 +243,7 @@ bool live(const Run& spec, Life& life) {
   life.sessions = shadow.sessions();
   life.evidence = shadow.evidence();
   life.genome = shadow.genome();
+  life.board = lab.core().personality().genome();
   return true;
 }
 
@@ -510,6 +517,10 @@ void metric(const char* scenario, const char* name, double value, const char* no
 
 void pe2(const char* scenario, const char* name, double value, const char* note = "") {
   std::printf("pe2,%s,%s,%.4f,%s\n", scenario, name, value, note);
+}
+
+void pe4(const char* scenario, const char* name, double value, const char* note = "") {
+  std::printf("pe4,%s,%s,%.4f,%s\n", scenario, name, value, note);
 }
 
 // Mean and spread (max − min) over a group of lives.
@@ -966,6 +977,24 @@ bool longOwners() {
   pe1("long_owners", "p1_curiosity_day89", meanOffset(lives[1], kSeeds, TraitId::Curiosity));
   pe1("long_owners", "p2_playfulness_day89", meanOffset(lives[2], kSeeds, TraitId::Playfulness));
   pe1("long_owners", "p0_sociability_day89", meanOffset(lives[0], kSeeds, TraitId::Sociability));
+  // PE-4a transfer: in a situation nobody taught (the play context, never
+  // used here), how often each pet would show idle / happy / curious at day
+  // 89, from its genome alone (Leaning, board defaults).
+  const char* actionNames[] = {"idle", "happy", "curious"};
+  for (uint8_t profile = 0; profile < 3; ++profile) {
+    double share[kActions] = {};
+    for (uint32_t s = 0; s < kSeeds; ++s) {
+      const V3Leaning lean = Leaning::forChoice(lives[profile][s].board,
+                                                LearnInteraction::PlayRequest, LeaningConfig());
+      const double total = double(lean.weightQ8[0]) + lean.weightQ8[1] + lean.weightQ8[2];
+      for (uint8_t a = 0; a < kActions; ++a) share[a] += lean.weightQ8[a] / total / kSeeds;
+    }
+    for (uint8_t a = 0; a < kActions; ++a) {
+      char name[48];
+      std::snprintf(name, sizeof(name), "p%u_untaught_%s_share_day89", profile, actionNames[a]);
+      pe4("long_owners", name, share[a], a == 0 ? "untaught cell, 1/3 = no lean" : "");
+    }
+  }
   return true;
 }
 
@@ -1024,10 +1053,141 @@ bool sweepDrives() {
   return true;
 }
 
+// ---- PE-4a: the temperament leans real choices (Leaning.h) ----
+
+// Mean pairwise JS of what XUNA really showed, between the `n` lives.
+double withinJs(const Life* lives, uint32_t n, uint32_t from, uint32_t to) {
+  double sum = 0;
+  uint32_t pairs = 0;
+  for (uint32_t a = 0; a < n; ++a)
+    for (uint32_t b = a + 1; b < n; ++b, ++pairs)
+      sum += distance(lives[a], from, to, lives[b], from, to, 10).value;
+  return pairs ? sum / pairs : 0;
+}
+
+// Same owner draws, different pets (only the PetId entropy differs), so any
+// difference in what they show comes from the temperament.
+bool sameOwner(OwnerKind kind, uint8_t profile, const LeaningConfig& lean, Life* lives, Run* runs) {
+  for (uint32_t s = 0; s < kSeeds; ++s) {
+    runs[s] = run("leaning", owner(kind, profile), 1);
+    runs[s].entropySeed = s + 1;
+    runs[s].leaning = lean;
+    if (!live(runs[s], lives[s])) return false;
+  }
+  return true;
+}
+
+struct Follow {
+  double firstDay;  // mean first day ≥ 75 % of fine cells follow the owner
+  uint32_t never;   // lives that never got there
+  double day29;     // mean share of fine cells following on day 29
+};
+
+// Learning over `n` × 3 profiles of lives with their own owner draws and pets.
+bool follow(OwnerKind kind, const LeaningConfig& lean, uint32_t n, Follow& out) {
+  static Life life;
+  double sum = 0, final = 0;
+  uint32_t got = 0;
+  out.never = 0;
+  for (uint32_t s = 0; s < n; ++s) {
+    for (uint8_t profile = 0; profile < 3; ++profile) {
+      Run r = run("leaning", owner(kind, profile), s + 1);
+      r.leaning = lean;
+      if (!live(r, life)) return false;
+      const OwnerModel m(r.owner);
+      const uint32_t d = firstDayMatching(life, m, 1, 0.75);
+      if (d == kNever) {
+        ++out.never;
+      } else {
+        sum += d;
+        ++got;
+      }
+      final += match(life, 29, m);
+    }
+  }
+  out.firstDay = got ? sum / got : -1;
+  out.day29 = final / (3 * n);
+  return true;
+}
+
+// What each lever adds, and what it costs learning. Individuality = JS
+// between pets under the same owner draws (temperament is all that differs).
+bool sweepLeaning() {
+  struct Variant {
+    const char* name;
+    uint16_t tie, margin;
+  };
+  const Variant variants[] = {
+      {"off", 0, 0},          {"tie_0.5", 128, 0},           {"tie_1.0", 256, 0},
+      {"tie_0.5+margin_0.03", 128, 1966}, {"tie_1.0+margin_0.03", 256, 1966},
+  };
+  constexpr uint32_t kSpeedRuns = 20;  // × 3 profiles: the speeds are noisy
+  std::printf("# leaning,<variant>,<tie gain>,<margin>,"
+              "<silent js same owner days 23-29>,<sparse js same owner days 1-7>,"
+              "<oracle js same owner days 1-7>,<oracle js same owner days 23-29>,"
+              "<oracle first day 75%%>,<oracle never>,<sparse first day 75%%>,<sparse never>,"
+              "<noisy first day 75%%>,<noisy never>,<noisy day-29 follow>,"
+              "<random learned_abs>,<reversal days to 75%%>,<reversal never>\n");
+  static Life lives[kSeeds];
+  static Run runs[kSeeds];
+  for (const Variant& v : variants) {
+    LeaningConfig lean;
+    lean.tieGainQ8 = v.tie;
+    lean.marginQ16 = v.margin;
+    if (!sameOwner(OwnerKind::NoFeedback, 1, lean, lives, runs)) return false;
+    const double silentJs = withinJs(lives, kSeeds, kWeekFrom, kWeekTo);
+    if (!sameOwner(OwnerKind::Sparse, 1, lean, lives, runs)) return false;
+    const double sparseJs = withinJs(lives, kSeeds, 1, 7);
+    double oJs1 = 0, oJs4 = 0;
+    for (uint8_t profile = 0; profile < 3; ++profile) {
+      if (!sameOwner(OwnerKind::Oracle, profile, lean, lives, runs)) return false;
+      oJs1 += withinJs(lives, kSeeds, 1, 7) / 3;
+      oJs4 += withinJs(lives, kSeeds, kWeekFrom, kWeekTo) / 3;
+    }
+    Follow oracle, sparse, noisy;
+    if (!follow(OwnerKind::Oracle, lean, kSpeedRuns, oracle) ||
+        !follow(OwnerKind::Sparse, lean, kSpeedRuns, sparse) ||
+        !follow(OwnerKind::Noisy, lean, kSpeedRuns, noisy))
+      return false;
+    double drift = 0, latency = 0;
+    uint32_t reversed = 0, rNever = 0;
+    for (uint32_t s = 0; s < 2 * kSeeds; ++s) {
+      Run r = run("leaning", owner(OwnerKind::Random, 1), s + 1);
+      r.leaning = lean;
+      if (!live(r, lives[0])) return false;
+      drift += learnedAbsReaction(lives[0]) / (2 * kSeeds);
+      OwnerConfig o = owner(OwnerKind::Reversal, 1, 2);
+      o.changeAt = 15;
+      r = run("leaning", o, s + 1);
+      r.leaning = lean;
+      if (!live(r, lives[0])) return false;
+      const uint32_t d = firstDayMatching(lives[0], OwnerModel(o), 15, 0.75);
+      if (d == kNever) {
+        ++rNever;
+      } else {
+        latency += d - 15;
+        ++reversed;
+      }
+    }
+    std::printf("leaning,%s,%.2f,%.3f,%.4f,%.4f,%.4f,%.4f,%.2f,%u,%.2f,%u,%.2f,%u,%.3f,"
+                "%.4f,%.2f,%u\n",
+                v.name, v.tie / 256.0, v.margin / 65536.0, silentJs, sparseJs, oJs1, oJs4, oracle.firstDay, oracle.never, sparse.firstDay,
+                sparse.never, noisy.firstDay, noisy.never, noisy.day29, drift,
+                reversed ? latency / reversed : -1, rNever);
+  }
+  return true;
+}
+
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
   const auto start = std::chrono::steady_clock::now();
+  if (argc > 1 && std::strcmp(argv[1], "leaning") == 0) {  // PE-4a sweep alone
+    const bool ok = sweepLeaning();
+    const std::chrono::duration<double> spent = std::chrono::steady_clock::now() - start;
+    std::fprintf(stderr, "runtime_s=%.1f\n", spent.count());
+    return ok ? 0 : 1;
+  }
   std::printf("# PE-0 baseline. run,<scenario>,<owner kind>,<owner seed>,<entropy seed>,"
               "<decisions>,<pets>,<shoos>,<day-29 greedy quiet p0-4 greeting p0-4>,<learner fingerprint>\n");
   std::printf("# metric,<scenario>,<name>,<value>,<note>\n");
@@ -1047,6 +1207,7 @@ int main() {
   ok = ok && longOwners();
   ok = ok && sweepLedger();
   ok = ok && sweepDrives();
+  ok = ok && sweepLeaning();
   const std::chrono::duration<double> spent = std::chrono::steady_clock::now() - start;
   std::fprintf(stderr, "runtime_s=%.1f\n", spent.count());
   return ok ? 0 : 1;

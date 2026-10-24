@@ -39,10 +39,12 @@ class ProductLearner {
   // Chooses among the learner actions whose bit is set in `allowedMask`
   // (callers pass the actions the FSM/cooldowns would accept). Returns an
   // empty decision (id 0) when nothing is allowed or the context is invalid.
+  // `leaning` is the temperament's lean (PE-4a); the default leans nowhere.
   V3Decision choose(LearnInteraction interaction, uint8_t dayPart, uint32_t id,
-                    uint8_t allowedMask, IRandom& random) {
+                    uint8_t allowedMask, IRandom& random,
+                    const V3Leaning& leaning = V3Leaning()) {
     return state_.learner.choose(static_cast<uint8_t>(interaction), dayPart,
-                                 id, allowedMask, random);
+                                 id, allowedMask, random, leaning);
   }
 
   // Only a shown decision becomes rateable; a new one replaces the old.

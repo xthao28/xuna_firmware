@@ -46,6 +46,25 @@ struct LearnerV3Config {
   uint32_t reactionWeightQ16 = 19661;  // w_r = 0.3
 };
 
+// Personality PE-4a (plan docs/roadmap/personality): how the pet's
+// temperament leans a choice. It never touches an estimate or the UCB
+// bonus. The default (all weights equal) chooses exactly as before, random
+// draws included.
+// - weightQ8: among actions whose scores tie (nothing learned tells them
+//   apart yet), the pick is random in proportion to these weights instead
+//   of uniform (256 = 1.0).
+// - marginQ16: scores within this of the best count as a tie, so the lean
+//   also decides between actions the owner has barely told apart. 0 = exact
+//   ties only, so what the owner taught always wins.
+struct V3Leaning {
+  uint16_t weightQ8[LearnerV3Config::kMaxActions];
+  uint32_t marginQ16;
+
+  V3Leaning() : marginQ16(0) {
+    for (uint8_t a = 0; a < LearnerV3Config::kMaxActions; ++a) weightQ8[a] = 256;
+  }
+};
+
 struct V3Decision {
   uint32_t id = 0;
   uint8_t interaction = 0;
@@ -106,7 +125,8 @@ class PreferenceLearnerV3 {
 
   // `allowedMask` bit a = action a is allowed (FSM, cooldown, energy, stage).
   V3Decision choose(uint8_t interaction, uint8_t dayPart, uint32_t id,
-                    uint8_t allowedMask, IRandom& random) {
+                    uint8_t allowedMask, IRandom& random,
+                    const V3Leaning& leaning = V3Leaning()) {
     V3Decision decision;
     decision.id = id;
     decision.interaction = interaction;
@@ -125,13 +145,13 @@ class PreferenceLearnerV3 {
     lastRated_ = false;
 
     const uint8_t greedyAction =
-        bestBy(interaction, dayPart, allowedMask, false, random);
+        bestBy(interaction, dayPart, allowedMask, false, random, leaning);
     uint8_t chosen = greedyAction;
     switch (config_.policy) {
       case ExplorePolicy::Greedy:
         break;
       case ExplorePolicy::Ucb:
-        chosen = bestBy(interaction, dayPart, allowedMask, true, random);
+        chosen = bestBy(interaction, dayPart, allowedMask, true, random, leaning);
         decision.explore = chosen != greedyAction;
         break;
       case ExplorePolicy::EpsilonGreedy:
@@ -401,12 +421,14 @@ class PreferenceLearnerV3 {
     return static_cast<uint32_t>(result);
   }
 
-  // Highest estimate (or UCB score) among allowed actions; ties by RNG.
+  // Highest estimate (or UCB score) among allowed actions; ties (within the
+  // leaning's margin) by RNG, weighted by the leaning.
   uint8_t bestBy(uint8_t interaction, uint8_t dayPart, uint8_t allowed,
-                 bool optimistic, IRandom& random) const {
+                 bool optimistic, IRandom& random,
+                 const V3Leaning& leaning) const {
     uint32_t scores[LearnerV3Config::kMaxActions] = {};
     uint32_t best = 0;
-    uint8_t ties = 0;
+    bool any = false;
     for (uint8_t a = 0; a < config_.actions; ++a) {
       if (!(allowed & (1U << a))) continue;
       const V3CellView cell = view(interaction, dayPart, a);
@@ -416,14 +438,18 @@ class PreferenceLearnerV3 {
             (uint64_t(config_.ucbBonusQ16) << 8) /
             isqrt(uint64_t(cell.nEffQ16) + 65536U));
       scores[a] = score;
-      if (ties == 0 || score > best) {
-        best = score;
-        ties = 1;
-      } else if (score == best) {
-        ++ties;
-      }
+      if (!any || score > best) best = score;
+      any = true;
     }
-    return pick(scores, allowed, best, ties, random);
+    // The margin only lets the temperament decide: when the near-tied
+    // actions weigh the same, only exact ties are ties.
+    uint32_t floor = best;
+    const uint32_t wide = best > leaning.marginQ16 ? best - leaning.marginQ16 : 0;
+    if (wide != best && !evenWeights(scores, allowed, wide, leaning.weightQ8)) floor = wide;
+    uint8_t ties = 0;
+    for (uint8_t a = 0; a < config_.actions; ++a)
+      if ((allowed & (1U << a)) && scores[a] >= floor) ++ties;
+    return pick(scores, allowed, floor, ties, random, leaning.weightQ8);
   }
 
   // Least-rated allowed action (lowest nEff); ties by RNG.
@@ -447,12 +473,43 @@ class PreferenceLearnerV3 {
     return pick(scores, allowed, best, ties, random);
   }
 
-  uint8_t pick(const uint32_t* scores, uint8_t allowed, uint32_t best,
-               uint8_t ties, IRandom& random) const {
+  // True when every allowed action scoring at least `floor` has the same weight.
+  bool evenWeights(const uint32_t* scores, uint8_t allowed, uint32_t floor,
+                   const uint16_t* weights) const {
+    bool seen = false;
+    uint16_t first = 0;
+    for (uint8_t a = 0; a < config_.actions; ++a) {
+      if (!(allowed & (1U << a)) || scores[a] < floor) continue;
+      if (seen && weights[a] != first) return false;
+      first = weights[a];
+      seen = true;
+    }
+    return true;
+  }
+
+  // One of the `ties` allowed actions scoring at least `floor` (the best
+  // score, or the best minus the leaning's margin): uniform, or in
+  // proportion to `weights` when they differ among the tied actions (one
+  // draw either way; equal weights take the uniform path, bit for bit).
+  uint8_t pick(const uint32_t* scores, uint8_t allowed, uint32_t floor,
+               uint8_t ties, IRandom& random, const uint16_t* weights = 0) const {
+    if (ties > 1 && weights != 0 && !evenWeights(scores, allowed, floor, weights)) {
+      uint32_t total = 0;
+      for (uint8_t a = 0; a < config_.actions; ++a)
+        if ((allowed & (1U << a)) && scores[a] >= floor) total += weights[a];
+      if (total != 0) {
+        uint32_t draw = random.below(total);
+        for (uint8_t a = 0; a < config_.actions; ++a) {
+          if (!(allowed & (1U << a)) || scores[a] < floor) continue;
+          if (draw < weights[a]) return a;
+          draw -= weights[a];
+        }
+      }
+    }
     const uint32_t rank = ties > 1 ? random.below(ties) : 0;
     uint32_t seen = 0;
     for (uint8_t a = 0; a < config_.actions; ++a) {
-      if (!(allowed & (1U << a)) || scores[a] != best) continue;
+      if (!(allowed & (1U << a)) || scores[a] < floor) continue;
       if (seen++ == rank) return a;
     }
     return 0;

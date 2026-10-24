@@ -14,8 +14,9 @@ namespace xuna {
 // Personality PE-2 (plan docs/roadmap/personality, 2026-10-24): the
 // temperament genome, evidence ledger, drives and affect as one unit, fed
 // with plain values so LifeCore can own it on the board. It watches what
-// really happens (owner inputs, choices XUNA showed, pet / shoo) and never
-// changes XUNA's decisions; only expression reads it (Expression.h).
+// really happens (owner inputs, choices XUNA showed, pet / shoo). Expression
+// reads it (Expression.h), and from PE-4a it leans XUNA's choices where
+// learning has no answer (Leaning.h).
 // PE-3: offsets, the evidence ledger, the journal and the counters survive a
 // reboot through snapshot section 5 (PersonalityCodec). Drives and affect
 // are transient, like needs: they restart at every boot.
