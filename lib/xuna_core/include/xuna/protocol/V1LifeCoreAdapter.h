@@ -301,6 +301,16 @@ class V1LifeCoreAdapter {
         learnIndexFor(static_cast<ActionId>(c.action),explanation_.action);
         return kOk;
       }
+      case 9: {
+        // PE-4d: arg 1 undo the newest change, 2 reset. Nothing to undo is
+        // invalid_argument; a failed commit is not_ready and changes nothing.
+        switch (core_.controlPersonality(c.arg == 2)) {
+          case LifeCore::PersonalityControlResult::Applied: return kOk;
+          case LifeCore::PersonalityControlResult::Nothing: return kInvalidArgument;
+          case LifeCore::PersonalityControlResult::NotReady: return kNotReady;
+        }
+        return kNotReady;
+      }
       case 8: {
         // PE-4c: ok also when the daily cap ignores it; the app never retries.
         const LifeCoreEvent event(LifeCoreEventKind::Conversation, c.id, 0, c.arg);

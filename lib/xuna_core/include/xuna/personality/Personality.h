@@ -225,6 +225,18 @@ class Personality {
     ++revision_;
   }
 
+  // PE-4d "Bỏ thay đổi gần nhất": the newest journal change is reverted and
+  // leaves the journal; the evidence that caused it was already spent.
+  // Repeating it walks back through the journal. False when it is empty.
+  bool undoLatest() {
+    JournalEntry e;
+    if (!ledger_.popLatest(e)) return false;
+    Temperament::shift(genome_, static_cast<TraitId>(e.trait), static_cast<int16_t>(-e.delta));
+    refresh();
+    ++revision_;
+    return true;
+  }
+
   // Changes whenever something persisted changes (genome offsets, ledger,
   // journal, counters); LifeCore re-encodes section 5 only then.
   uint32_t revision() const { return revision_; }

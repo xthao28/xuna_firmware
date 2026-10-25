@@ -204,6 +204,17 @@ class EvidenceLedger {
     sequence_ = 0;
   }
 
+  // PE-4d: take the newest journal entry back out (the owner undoes it).
+  // False when the journal is empty. The sequence counter keeps counting.
+  bool popLatest(JournalEntry& out) {
+    const uint8_t slot = static_cast<uint8_t>((head_ + kJournalSize - 1) % kJournalSize);
+    if (journal_[slot].sequence == 0) return false;
+    out = journal_[slot];
+    journal_[slot] = JournalEntry();
+    head_ = slot;
+    return true;
+  }
+
   const TraitLedger& trait(TraitId trait) const {
     return traits_[static_cast<uint8_t>(trait) % kTraitCount];
   }

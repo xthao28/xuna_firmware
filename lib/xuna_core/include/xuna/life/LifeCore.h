@@ -284,6 +284,27 @@ class LifeCore {
     return true;
   }
 
+  // PE-4d owner controls (BLE opcode 9): undo the newest personality change
+  // or reset what XUNA became (the innate baseline stays). Commit-first like
+  // forget(): section 5 is written before RAM changes. Learning is untouched.
+  enum class PersonalityControlResult : uint8_t { Applied, Nothing, NotReady };
+  PersonalityControlResult controlPersonality(bool reset) {
+    if (!started_ || activity_.state() == Activity::ErrorSafe)
+      return PersonalityControlResult::NotReady;
+    Personality staged = personality_;
+    if (reset) staged.forget();
+    else if (!staged.undoLatest()) return PersonalityControlResult::Nothing;
+    LifeSnapshotV2 snapshot = learner_.state();
+    SnapshotPersonality& stored = snapshot.personality;
+    stored.length = static_cast<uint16_t>(
+        PersonalityCodec::encode(staged, stored.bytes, sizeof(stored.bytes)));
+    if (commit_ != 0 && !commit_->commit(snapshot)) return PersonalityControlResult::NotReady;
+    personality_ = staged;
+    learner_.state().personality = stored;
+    syncedRevision_ = personality_.revision();
+    return PersonalityControlResult::Applied;
+  }
+
   // Track A: the variant to play, once (the display adapter takes it).
   VisualVariant takeVariant() {
     const VisualVariant v = variant_;
