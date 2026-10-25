@@ -34,6 +34,9 @@ enum class LifeCoreEventKind : uint8_t {
   // XUNA picks what to do on its own while idle (offline quiet routine);
   // a quiet-context decision the owner can react to.
   Spontaneous,
+  // PE-4c: a closed conversation tag (opcode 8), action = ConversationTag.
+  // Affect and personality evidence only; learning is untouched (O4).
+  Conversation,
 };
 
 // Core-facing event vocabulary. Transport adapters translate BLE/buttons/text
@@ -98,6 +101,7 @@ struct LifeCoreStepOutput {
   uint8_t decisionContext = 0;     // LearnInteraction of the pending decision
   uint8_t decisionDayPart = 0;     // 0 = unknown; 1–4 morning…night
   uint8_t traitsConsolidated = 0;  // personality traits moved (TraitConsolidated; journal)
+  bool conversationApplied = false;  // a conversation tag was felt (not capped)
   VisualVariant variant = VisualVariant::None;  // Track A variant started this step
 };
 
@@ -343,6 +347,10 @@ class LifeCore {
         return;
       case LifeCoreEventKind::StatedPreference:
         statePreference(event, output);
+        return;
+      case LifeCoreEventKind::Conversation:
+        output.conversationApplied =
+            personality_.conversation(static_cast<ConversationTag>(event.action), now);
         return;
       case LifeCoreEventKind::Reaction:
       case LifeCoreEventKind::Feedback: {

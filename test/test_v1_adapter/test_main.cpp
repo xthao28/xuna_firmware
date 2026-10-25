@@ -545,8 +545,41 @@ void baseline_rejects_variant_preview() {
   TEST_ASSERT_EQUAL_UINT8(uint8_t(VisualVariant::None), uint8_t(rig.core.takeVariant()));
 }
 
+// PE-4c: opcode 8 forwards a conversation tag; the result is ok even when
+// capped, a replay comes from the cache, and bad tags or sources are rejected.
+void enhanced_conversation_signal_is_felt_once() {
+  Rig rig(false, true);
+  rig.core.seedPersonality(0x5eed1234U);
+  rig.boot(1000);
+  uint32_t id = 0;
+  const uint32_t feedback = rig.core.snapshot().counters.feedbackCount;
+  TEST_ASSERT_EQUAL_UINT8(0, rig.send("01 08 40 00 00 00 01 00", 2000, id));
+  TEST_ASSERT_EQUAL_UINT32(0x40, id);
+  TEST_ASSERT_TRUE(rig.adapter.last().conversationApplied);
+  TEST_ASSERT_EQUAL_UINT32(1, rig.core.personality().evidence());
+  TEST_ASSERT_EQUAL_UINT8(0, rig.send("01 08 40 00 00 00 01 00", 2500, id));  // replay
+  TEST_ASSERT_EQUAL_UINT32(1, rig.core.personality().evidence());
+  TEST_ASSERT_EQUAL_UINT8(4, rig.send("01 08 41 00 00 00 00 00", 3000, id));  // tag 0
+  TEST_ASSERT_EQUAL_UINT8(4, rig.send("01 08 42 00 00 00 07 00", 3001, id));  // tag 7
+  TEST_ASSERT_EQUAL_UINT8(4, rig.send("01 08 43 00 00 00 01 02", 3002, id));  // source
+  TEST_ASSERT_EQUAL_UINT8(2, rig.send("01 08 44 00 00 00 01 00 00 00 00 00", 3003, id));
+  TEST_ASSERT_EQUAL_UINT32(feedback, rig.core.snapshot().counters.feedbackCount);
+}
+
+// The baseline v1 adapter does not know opcode 8.
+void baseline_rejects_conversation_signal() {
+  Rig rig;
+  putS01Pet(rig.store);
+  rig.boot(1000);
+  uint32_t id = 0;
+  TEST_ASSERT_EQUAL_UINT8(3, rig.send("01 08 50 00 00 00 01 00", 2000, id));
+  TEST_ASSERT_EQUAL_UINT32(0, rig.core.personality().evidence());
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
+  RUN_TEST(enhanced_conversation_signal_is_felt_once);
+  RUN_TEST(baseline_rejects_conversation_signal);
   RUN_TEST(enhanced_variant_preview_is_shown_only);
   RUN_TEST(baseline_rejects_variant_preview);
   RUN_TEST(time_sync_accepts_frozen_frame_and_rejects_rollback);

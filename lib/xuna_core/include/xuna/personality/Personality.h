@@ -11,6 +11,20 @@
 
 namespace xuna {
 
+// PE-4c (P-D4, plan §6): closed tags the backend derives from what the owner
+// said in a chat turn; the app forwards them (BLE opcode 8, arg = wire value).
+enum class ConversationTag : uint8_t {
+  None = 0,
+  Praise,
+  Scold,
+  Affection,
+  Playful,
+  CuriousQuestion,
+  LongChat,
+};
+
+constexpr uint8_t kConversationTagCount = 7;
+
 // Personality PE-2 (plan docs/roadmap/personality, 2026-10-24): the
 // temperament genome, evidence ledger, drives and affect as one unit, fed
 // with plain values so LifeCore can own it on the board. It watches what
@@ -29,6 +43,11 @@ namespace xuna {
 //   consistent owner max it out within ~3 months, PE-1d finding);
 // - tempo: owner-session density (device observed): ≥ kLivelyInputs inputs
 //   is lively (+1), ≤ kCalmInputs is calm (−1).
+// - conversation tags (PE-4c, no confirmation, plan §6): praise, affection
+//   and long chats → sociability +, scold → sociability −, playful →
+//   playfulness +, curious questions → curiosity +; source
+//   ConversationInferred (weight 0.1, ≤ device observed), at most
+//   kConversationDailyCap tags a day, and the usual ≥ 4 sessions rule.
 // Sensitivity, mood baseline/inertia, persistence, boredom and restfulness
 // get no evidence (O1 delegated default: innate only).
 // An owner session starts at an owner input after ≥ kSessionGapMs without
@@ -39,6 +58,10 @@ class Personality {
   static constexpr uint32_t kSessionGapMs = 30UL * 60UL * 1000UL;  // as HabitPredictor
   static constexpr uint16_t kLivelyInputs = 8;   // [P]
   static constexpr uint16_t kCalmInputs = 2;     // [P]
+  // Conversation tags felt per day of uptime (transient: a reboot restarts
+  // the count, like drives and affect). [P]
+  static constexpr uint8_t kConversationDailyCap = 8;
+  static constexpr uint32_t kDayMs = 24UL * 60UL * 60UL * 1000UL;
 
   explicit Personality(uint32_t petSeed = 0, const LedgerConfig& ledger = LedgerConfig())
       : ledger_(ledger) {
@@ -76,6 +99,8 @@ class Personality {
     affect_.reset(now);
     open_ = false;
     last_ = Shown();
+    talkStart_ = now;
+    talkCount_ = 0;
   }
 
   // Any owner input (button, app command). Call before reaction(). True when
@@ -129,6 +154,56 @@ class Personality {
       observe(TraitId::Playfulness, e, EvidenceSource::OwnerReaction,
               e >= 0 ? EvidenceReason::PlayRewarded : EvidenceReason::PlayShooed);
     }
+  }
+
+  // A conversation tag (PE-4c), after ownerInput(). XUNA feels it at once
+  // and it is weak evidence for one trait. False when ignored: unknown tag,
+  // no open session, or the daily cap is reached.
+  bool conversation(ConversationTag tag, uint32_t now) {
+    const uint8_t t = static_cast<uint8_t>(tag);
+    if (t == 0 || t >= kConversationTagCount || !open_) return false;
+    if (uint32_t(now - talkStart_) >= kDayMs) {
+      talkStart_ = now;
+      talkCount_ = 0;
+    }
+    if (talkCount_ >= kConversationDailyCap) return false;
+    ++talkCount_;
+    const int16_t half = kTraitOne / 2, quarter = kTraitOne / 4;
+    switch (tag) {
+      case ConversationTag::Praise:
+        affect_.conversation(half, quarter);
+        observe(TraitId::Sociability, kTraitOne, EvidenceSource::ConversationInferred,
+                EvidenceReason::ConversationPraise);
+        break;
+      case ConversationTag::Scold:
+        affect_.conversation(int16_t(-half), quarter);
+        observe(TraitId::Sociability, int16_t(-kTraitOne), EvidenceSource::ConversationInferred,
+                EvidenceReason::ConversationScold);
+        break;
+      case ConversationTag::Affection:
+        affect_.conversation(half, 0);
+        observe(TraitId::Sociability, kTraitOne, EvidenceSource::ConversationInferred,
+                EvidenceReason::ConversationAffection);
+        break;
+      case ConversationTag::Playful:
+        affect_.conversation(quarter, half);
+        observe(TraitId::Playfulness, kTraitOne, EvidenceSource::ConversationInferred,
+                EvidenceReason::ConversationPlay);
+        break;
+      case ConversationTag::CuriousQuestion:
+        affect_.conversation(kTraitOne / 8, quarter);
+        observe(TraitId::Curiosity, kTraitOne, EvidenceSource::ConversationInferred,
+                EvidenceReason::ConversationQuestion);
+        break;
+      case ConversationTag::LongChat:
+        affect_.conversation(quarter, 0);
+        observe(TraitId::Sociability, kTraitOne, EvidenceSource::ConversationInferred,
+                EvidenceReason::ConversationLong);
+        break;
+      case ConversationTag::None:
+        break;
+    }
+    return true;
   }
 
   // XUNA showed `action` (whoever chose it): satisfies drives.
@@ -214,6 +289,8 @@ class Personality {
   uint32_t session_ = 0;
   uint32_t lastOwner_ = 0;
   uint16_t inputs_ = 0;
+  uint32_t talkStart_ = 0;
+  uint8_t talkCount_ = 0;
   uint32_t shifts_ = 0;
   uint32_t decays_ = 0;
   uint32_t evidence_ = 0;

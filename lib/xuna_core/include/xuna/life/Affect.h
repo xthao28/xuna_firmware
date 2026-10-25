@@ -108,6 +108,13 @@ class Affect {
     return Appraisal::Welcome;
   }
 
+  // PE-4c: a conversation tag felt right away. Shares of the full impulse
+  // (Q1.14, ±1); the mood floor still holds. Not an appraisal of a choice,
+  // so competence and `last` stay as they were.
+  void conversation(int16_t valenceShare, int16_t arousalShare) {
+    impulse(int32_t(p_.gain) * valenceShare / kTraitOne, int32_t(p_.gain) * arousalShare / kTraitOne);
+  }
+
   // Advance to `now`. `boredomQ16` (Drives) lowers where arousal settles.
   void update(uint32_t now, uint16_t boredomQ16) {
     const uint64_t total = uint64_t(uint32_t(now - lastMs_)) + remainderMs_;

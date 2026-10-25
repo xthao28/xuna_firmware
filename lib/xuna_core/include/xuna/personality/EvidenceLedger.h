@@ -50,9 +50,14 @@ enum class EvidenceReason : uint8_t {
   ConversationScold,   // P-D4 tag
   PlayRewarded,        // owner petted a playful (happy) choice
   PlayShooed,          // owner shooed a playful (happy) choice
+  // PE-4c (2026-10-25): the rest of the closed conversation tags.
+  ConversationAffection,
+  ConversationPlay,
+  ConversationQuestion,
+  ConversationLong,
 };
 
-constexpr uint8_t kEvidenceReasonCount = 13;
+constexpr uint8_t kEvidenceReasonCount = 17;
 
 struct JournalEntry {
   uint16_t sequence = 0;  // 0 = empty slot

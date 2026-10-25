@@ -84,7 +84,8 @@ class V1LifeCoreAdapter {
   // echoed in the status value.
   uint8_t handle(const uint8_t* bytes, size_t size, uint32_t now, bool ready,
                  uint32_t& id) {
-    const BleCommand c = parseCommand(bytes, size, enhancedLearning_, true, false, enhancedLearning_);
+    const BleCommand c = parseCommand(bytes, size, enhancedLearning_, true, false, enhancedLearning_,
+                                        enhancedLearning_);
     id = c.id;
     uint8_t result = c.error;
     const int duplicate = size <= kMaxPacket ? cache_.find(bytes, size) : -1;
@@ -298,6 +299,12 @@ class V1LifeCoreAdapter {
         explanation_=V3Decision();explanation_.id=c.id;
         explanation_.interaction=c.contextKey>>4;explanation_.dayPart=c.contextKey&15;
         learnIndexFor(static_cast<ActionId>(c.action),explanation_.action);
+        return kOk;
+      }
+      case 8: {
+        // PE-4c: ok also when the daily cap ignores it; the app never retries.
+        const LifeCoreEvent event(LifeCoreEventKind::Conversation, c.id, 0, c.arg);
+        step(event, now);
         return kOk;
       }
     }

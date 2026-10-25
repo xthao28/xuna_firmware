@@ -85,8 +85,9 @@ class BleManager {
     auto* service=server->createService(BLEUUID(kService),32);
     auto* caps=service->createCharacteristic("7a6e0002-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ);
     // byte 3 bit 0: Identity V2 device proof (7a6e000d); bit 1: personality projection (7a6e000e).
+    // byte 3 bit 2: conversation signal (opcode 8, PE-4c).
     // byte 4 bits 4–7: Track A variant preview (opcode 1 args 4–7).
-    uint8_t b[8]={1,8,0xbf,0x03,0xff,3,0x60,0x09};caps->setValue(b,sizeof(b));
+    uint8_t b[8]={1,8,0xbf,0x07,0xff,3,0x60,0x09};caps->setValue(b,sizeof(b));
     auto* command=service->createCharacteristic("7a6e0003-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_WRITE);command->setCallbacks(&writeCallbacks_);
     status_=service->createCharacteristic("7a6e0004-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ|BLECharacteristic::PROPERTY_NOTIFY);status_->addDescriptor(new BLE2902());
     lifeStatus_=service->createCharacteristic("7a6e0005-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ);
@@ -122,6 +123,9 @@ class BleManager {
       if(p.size>=2&&p.bytes[1]==3)
         Serial.printf("stack tag=feedback high_water_bytes=%u result=%u\n",
                       unsigned(uxTaskGetStackHighWaterMark(nullptr)),result);
+      if(p.size>=7&&p.bytes[1]==8)
+        Serial.printf("conversation tag=%u result=%u applied=%u\n",unsigned(p.bytes[6]),result,
+                      adapter.last().conversationApplied?1u:0u);
       if(p.size>=2&&p.bytes[1]==5){
         const auto quality=adapter.clock().quality(adapter.monoNow());
         const auto part=adapter.clock().dayPart(adapter.monoNow());
