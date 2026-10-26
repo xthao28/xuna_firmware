@@ -137,6 +137,12 @@ void s10_cache_and_lifecycle() {
  TEST_ASSERT_TRUE(LifecycleCodec::encode(value,bytes));
  const uint8_t expected[8]={1,8,1,1,2,2,2,1};
  TEST_ASSERT_EQUAL_UINT8_ARRAY(expected,bytes,8);
+ value.stage=GrowthWireStage::Child;
+ TEST_ASSERT_TRUE(LifecycleCodec::encode(value,bytes));
+ TEST_ASSERT_EQUAL_UINT8(2,bytes[3]);
+ value.stage=GrowthWireStage::Mature;
+ TEST_ASSERT_TRUE(LifecycleCodec::encode(value,bytes));
+ TEST_ASSERT_EQUAL_UINT8(3,bytes[3]);
  value.birth=BirthWireQuality::Unknown;
  TEST_ASSERT_FALSE(LifecycleCodec::encode(value,bytes));
 }
