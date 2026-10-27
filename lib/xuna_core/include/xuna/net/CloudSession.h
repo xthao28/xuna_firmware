@@ -53,7 +53,7 @@ class CloudSession {
   static constexpr size_t kMaxFrame=512;
   static constexpr uint32_t kBackoffMinMs=2000,kBackoffMaxMs=300000;
   static constexpr uint32_t kLongWaitMs=1800000;  // not_bound / consent_required
-  enum class Action : uint8_t { None, Sign, Send, Ready, Fail };
+  enum class Action : uint8_t { None, Sign, Send, Ready, Fail, Acked };
   explicit CloudSession(const char* petIdHex="",const char* firmware=""){configure(petIdHex,firmware);}
   void configure(const char* petIdHex,const char* firmware) {
     std::snprintf(petId_,sizeof(petId_),"%s",petIdHex);std::snprintf(firmware_,sizeof(firmware_),"%s",firmware);
@@ -63,6 +63,10 @@ class CloudSession {
   NetError lastError() const {return error_;}
   uint32_t heartbeatMs() const {return heartbeatS_*1000u;}
   const uint8_t* nonce() const {return nonce_;}
+  // The last projection ack: its generation, and whether the cloud holds it
+  // ("stored" or "duplicate"; "stale", "invalid", "consent_required" do not).
+  uint32_t ackGeneration() const {return ackGeneration_;}
+  bool ackStored() const {return ackStored_;}
 
   void connecting(){state_=CloudState::Connecting;}
   // TLS + WebSocket up: the hello to send.
@@ -99,6 +103,15 @@ class CloudSession {
       if(!std::strcmp(type,"pong")){
         uint32_t seq=0;
         if(JsonFlat::uint(json,n,"seq",seq)&&seq==pingSeq_)lastPongMs_=nowMs;
+      }
+      if(!std::strcmp(type,"ack")){
+        char ref[16],result[24];uint32_t generation=0;
+        if(JsonFlat::string(json,n,"ref",ref,sizeof(ref))&&!std::strcmp(ref,"projection")&&
+           JsonFlat::uint(json,n,"generation",generation)&&JsonFlat::string(json,n,"result",result,sizeof(result))){
+          ackGeneration_=generation;
+          ackStored_=!std::strcmp(result,"stored")||!std::strcmp(result,"duplicate");
+          return Action::Acked;
+        }
       }
       return Action::None;  // unknown server messages are ignored, never acted on (H2)
     }
@@ -158,6 +171,7 @@ class CloudSession {
   char petId_[33]={},firmware_[33]={};
   uint8_t nonce_[32]={};
   CloudState state_=CloudState::Off;NetError error_=NetError::None;Phase phase_=Phase::Idle;
-  uint32_t heartbeatS_=30,attempts_=0,pingSeq_=0,lastPingMs_=0,lastPongMs_=0;
+  uint32_t heartbeatS_=30,attempts_=0,pingSeq_=0,lastPingMs_=0,lastPongMs_=0,ackGeneration_=0;
+  bool ackStored_=false;
 };
 }

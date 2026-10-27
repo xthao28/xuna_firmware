@@ -21,6 +21,7 @@
 #endif
 #include "NetConfigStore.h"
 #include "NetManager.h"
+#include "CloudBackup.h"
 #endif
 
 // Recovery and urgent commits stage several KB; ESP-IDF reports high water in bytes.
@@ -48,6 +49,7 @@ xuna::E14Diagnostics e14;  // E14 gate metrics; XUNA_E14=1 also starts the netwo
 #ifdef XUNA_NET
 xuna::NetConfigStore netStore;  // DC-2: Wi-Fi settings written by the app over BLE
 xuna::NetManager net;
+xuna::CloudBackup backup;  // DC-5: automatic projection backup over the cloud session
 bool netReady = false;
 #endif
 bool bleReady = false, lifeReady = false, persistReady = false;
@@ -197,7 +199,8 @@ void setup() {
     const bool configured=netStore.load(stored);
     netReady=net.begin(configured?&stored:nullptr,xuna::kFirmwareVersion);
     stored.wipe();
-    Serial.printf("net configured=%u task=%u\n",configured?1u:0u,netReady?1u:0u);
+    const bool backupReady=backup.begin();
+    Serial.printf("net configured=%u task=%u backup=%u\n",configured?1u:0u,netReady?1u:0u,backupReady?1u:0u);
   }
 #endif
   logMemory();
@@ -234,6 +237,7 @@ void loop() {
     if (!identified && readyIdentity) { net.identify(readyIdentity->petId); identified=true; }
     // One session proof per cloud connection, signed here: DeviceKey is not shared with core 0.
     net.serviceSigning(deviceKey,readyIdentity?readyIdentity->petId:nullptr,adapter.generation());
+    backup.service(now,adapter,readyIdentity,net);
     ble.publishNet(net.status());
   }
 #endif

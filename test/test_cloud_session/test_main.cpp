@@ -72,6 +72,12 @@ void handshake_and_heartbeat(){
   const char future[]="{\"type\":\"suggestion\",\"schemaVersion\":1,\"x\":2}";
   TEST_ASSERT_EQUAL(int(CloudSession::Action::None),int(s.received(future,sizeof(future)-1,out,sizeof(out),len,31060)));
   TEST_ASSERT_EQUAL(int(CloudState::Ready),int(s.state()));  // ignored, never acted on
+  const char stored[]="{\"type\":\"ack\",\"schemaVersion\":1,\"ref\":\"projection\",\"generation\":40,\"result\":\"duplicate\"}";
+  TEST_ASSERT_EQUAL(int(CloudSession::Action::Acked),int(s.received(stored,sizeof(stored)-1,out,sizeof(out),len,31070)));
+  TEST_ASSERT_EQUAL_UINT32(40,s.ackGeneration());TEST_ASSERT_TRUE(s.ackStored());
+  const char refused[]="{\"type\":\"ack\",\"schemaVersion\":1,\"ref\":\"projection\",\"generation\":41,\"result\":\"consent_required\"}";
+  TEST_ASSERT_EQUAL(int(CloudSession::Action::Acked),int(s.received(refused,sizeof(refused)-1,out,sizeof(out),len,31080)));
+  TEST_ASSERT_FALSE(s.ackStored());
   // No pong for three heartbeats: the link is dead.
   s.tick(61050,out,sizeof(out),len);s.tick(91050,out,sizeof(out),len);
   TEST_ASSERT_EQUAL(int(CloudSession::Action::Fail),int(s.tick(121051,out,sizeof(out),len)));

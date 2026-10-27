@@ -20,6 +20,7 @@
 #include <xuna/base/Sha256.h>
 #include <xuna/identity/DeviceProof.h>
 #include <xuna/net/CloudSession.h>
+#include <xuna/net/ExportWriter.h>
 #include <xuna/net/NetConfig.h>
 #if !__has_include("E14DevCa.h")
 #error "XUNA_NET needs the pinned CA include/E14DevCa.h: run backend/scripts/make_dev_ca.py --firmware-header (docs/roadmap/cloud/E14-runbook.md)"
@@ -33,6 +34,8 @@ class NetManager {
     signJobs_=xQueueCreate(1,sizeof(SignJob));
     signResults_=xQueueCreate(1,sizeof(SignResult));
     if(!queue_||!signJobs_||!signResults_)return false;
+    // The projection frame (~1–2 KB) lives in PSRAM; without it, no backups.
+    projection_=static_cast<char*>(heap_caps_malloc(ExportWriter::kMaxFrame,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
     std::snprintf(firmware_,sizeof(firmware_),"%s",firmware);
     cloud_.configure("",firmware_);
     if(stored&&stored->valid())apply(*stored);
@@ -47,6 +50,17 @@ class NetManager {
     portENTER_CRITICAL(&lock_);std::memcpy(pendingPet_,hex,sizeof(hex));portEXIT_CRITICAL(&lock_);
   }
   NetStatus status() const {portENTER_CRITICAL(&lock_);const NetStatus s=status_;portEXIT_CRITICAL(&lock_);return s;}
+  // Projection backup (DC-5): the life loop writes a frame into
+  // projectionBuffer() while projectionSlotFree(), then offers it; the task
+  // sends it once on the ready session and frees the slot on the ack.
+  uint32_t readySessions() const {portENTER_CRITICAL(&lock_);const uint32_t n=readySessions_;portEXIT_CRITICAL(&lock_);return n;}
+  bool projectionSlotFree() const {
+    portENTER_CRITICAL(&lock_);const bool free=projection_&&!projectionLen_;portEXIT_CRITICAL(&lock_);return free;
+  }
+  char* projectionBuffer(){return projection_;}
+  void offerProjection(size_t len,uint32_t generation) {
+    portENTER_CRITICAL(&lock_);projectionLen_=len;projectionGeneration_=generation;portEXIT_CRITICAL(&lock_);
+  }
   // Life loop: signs a pending session proof (purpose 3, payload = own key)
   // with the current generation. At most once per connection attempt.
   void serviceSigning(IDeviceSigner& signer,const uint8_t* petId,uint32_t generation) {
@@ -85,6 +99,11 @@ class NetManager {
   esp_transport_handle_t ssl_=nullptr,ws_=nullptr;
   char tx_[CloudSession::kMaxFrame],rx_[CloudSession::kMaxFrame];
   uint32_t nextAttemptAt_=0;
+  char* projection_=nullptr;
+  size_t projectionLen_=0;          // guarded by lock_; 0 = slot free
+  uint32_t projectionGeneration_=0,readySessions_=0;
+  bool projectionSent_=false;       // task-owned: waiting for its ack
+  void releaseProjection(){projectionSent_=false;portENTER_CRITICAL(&lock_);projectionLen_=0;portEXIT_CRITICAL(&lock_);}
   template<class F> void edit(F f){portENTER_CRITICAL(&lock_);f(status_);portEXIT_CRITICAL(&lock_);}
   void setWifi(WifiState w,NetError e,int8_t rssi){edit([&](NetStatus& s){s.wifi=w;s.lastError=e;s.rssi=rssi;});}
   void setCloud(CloudState c,NetError e){edit([&](NetStatus& s){s.cloud=c;s.lastError=e;});}
@@ -173,6 +192,7 @@ class NetManager {
   // The session ends: close, back off, report.
   void end(NetError error) {
     esp_transport_close(ws_);
+    if(projectionSent_)releaseProjection();  // unanswered: the life loop offers it again next session
     const uint32_t waitMs=cloud_.ended(error,esp_random());
     nextAttemptAt_=millis()+waitMs;
     setCloud(cloud_.state(),error);
@@ -228,6 +248,7 @@ class NetManager {
           break;
         }
         case CloudSession::Action::Ready:
+          edit([&](NetStatus&){++readySessions_;});
           setCloud(CloudState::Ready,NetError::None);
           Serial.printf("net event=cloud_ready ms=%u heartbeat_s=%u\n",unsigned(millis()-started),
                         unsigned(cloud_.heartbeatMs()/1000));
@@ -237,7 +258,22 @@ class NetManager {
           break;
         case CloudSession::Action::Fail:
           end(cloud_.lastError()==NetError::None?NetError::Protocol:cloud_.lastError());return;
+        case CloudSession::Action::Acked:
+          if(projectionSent_&&cloud_.ackGeneration()==projectionGeneration_){
+            const bool stored=cloud_.ackStored();const uint32_t generation=projectionGeneration_;
+            if(stored)edit([&](NetStatus& s){s.lastBackupGeneration=generation;});
+            Serial.printf("net event=backup_ack generation=%u stored=%u\n",unsigned(generation),stored?1u:0u);
+            releaseProjection();
+          }
+          break;
         case CloudSession::Action::None:break;
+      }
+      size_t pending=0;
+      portENTER_CRITICAL(&lock_);pending=projectionLen_;portEXIT_CRITICAL(&lock_);
+      if(cloud_.state()==CloudState::Ready&&pending&&!projectionSent_){
+        if(!sendText(projection_,pending)){end(NetError::ServerUnreachable);return;}
+        projectionSent_=true;
+        Serial.printf("net event=backup_sent generation=%u bytes=%u\n",unsigned(projectionGeneration_),unsigned(pending));
       }
       const int8_t rssi=int8_t(WiFi.RSSI());
       edit([&](NetStatus& s){s.rssi=rssi;});
