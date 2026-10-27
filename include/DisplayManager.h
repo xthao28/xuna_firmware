@@ -2,6 +2,7 @@
 #include <TFT_eSPI.h>
 #include <xuna/visual/PetVisualAnimation.h>
 #include <xuna/visual/DeviceCards.h>
+#include <xuna/visual/SpeechBubble.h>
 #include <xuna/visual/SceneEffects.h>
 #include <xuna/visual/VariantPlayer.h>
 #include <xuna/visual/Backlight.h>
@@ -23,6 +24,11 @@ class DisplayManager {
   bool showPairing(const char* uri,const char* shortId,uint32_t now);
   bool cardOpen() const {return cardUntil_!=0;}
   void closeCard();
+  // Speech subtitle above XUNA (owner 2026-10-27). It replaces the previous
+  // one, pages by itself and hides after its last page; a card covers it
+  // meanwhile. Effects above XUNA's head are hidden while it shows.
+  bool showSpeech(const char* text,uint32_t now);
+  void clearSpeech(){speech_.clear();}
   uint32_t draws() const {return draws_;}
   uint32_t maxDrawUs() const {return maxDrawUs_;}
   uint32_t maxSceneUs() const {return maxSceneUs_;}
@@ -30,6 +36,7 @@ class DisplayManager {
  private:
   void drawWindow();
   void drawEffect(const EffectSample& sample);
+  void drawSpeech(int page);
   bool ensureCardBuffers();
   void openCard(uint32_t now,uint32_t durationMs);
   void setBacklight(uint8_t level);
@@ -44,6 +51,10 @@ class DisplayManager {
   uint16_t* card_=nullptr; // PSRAM, full screen
   uint8_t* qr_=nullptr;    // PSRAM, qrcodegen symbol + scratch
   uint32_t cardAt_=0,cardUntil_=0; // cardUntil_ = duration; 0 = closed
+  SpeechBubble speech_;
+  uint16_t* speechBuf_=nullptr; // PSRAM, bubble region, allocated on first use
+  int drawnSpeechPage_=-1;
+  bool effectValid_=true;
   EffectSample drawnEffect_{EffectKind::None,0,false};
   uint8_t lastFrame_=255;
   uint32_t draws_=0,maxDrawUs_=0,maxSceneUs_=0;

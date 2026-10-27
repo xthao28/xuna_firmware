@@ -9,12 +9,16 @@
 #include <xuna/identity/IdentityCodec.h>
 #include <xuna/identity/DeviceProof.h>
 #include <xuna/protocol/V1LifeCoreAdapter.h>
+#include <xuna/visual/SpeechBubble.h>
 namespace xuna {
 class BleManager {
   static constexpr const char* kService="7a6e0001-8c44-4db6-9f61-2b7d5300a101";
   struct Packet { uint8_t bytes[16];size_t size;uint32_t session; };
   struct ProofPacket { uint8_t bytes[DeviceProof::kRequestSize];size_t size;uint32_t session; };
-  QueueHandle_t queue_=nullptr,proofQueue_=nullptr;
+  struct SpeechPacket { uint8_t bytes[SpeechTextAssembler::kMaxFrame];size_t size;uint32_t session; };
+  QueueHandle_t queue_=nullptr,proofQueue_=nullptr,speechQueue_=nullptr;
+  SpeechTextAssembler speech_;
+  uint8_t speechPending_=0; // 1 = show speech_.text(), 2 = clear
   ProofService proof_;
   BLECharacteristic *status_=nullptr,*lifeStatus_=nullptr;
   BLECharacteristic* explanation_=nullptr;
@@ -68,6 +72,18 @@ class BleManager {
       xQueueSend(owner_.proofQueue_,&p,0);  // full → dropped; app re-requests
     }
   } proofCallbacks_{*this};
+  class SpeechCallbacks: public BLECharacteristicCallbacks {
+    BleManager& owner_;
+   public:
+    explicit SpeechCallbacks(BleManager& o):owner_(o){}
+    void onWrite(BLECharacteristic* characteristic) override {
+      const auto value=characteristic->getValue();
+      SpeechPacket p={};p.size=value.size();p.session=owner_.session_.load();
+      if(p.size>sizeof(p.bytes))p.size=sizeof(p.bytes)+1; // too long: the assembler rejects it
+      for(size_t i=0;i<value.size()&&i<sizeof(p.bytes);++i)p.bytes[i]=value[i];
+      xQueueSend(owner_.speechQueue_,&p,0);  // full → the text is incomplete and dropped
+    }
+  } speechCallbacks_{*this};
   void publishProof(const IDeviceSigner& signer) {
     uint8_t b[DeviceProof::kResponseSize];proof_.encode(signer,b);proofChar_->setValue(b,sizeof(b));
   }
@@ -80,17 +96,19 @@ class BleManager {
  public:
   bool begin() {
     queue_=xQueueCreate(8,sizeof(Packet));proofQueue_=xQueueCreate(1,sizeof(ProofPacket));
-    if(!queue_||!proofQueue_)return false;
+    speechQueue_=xQueueCreate(16,sizeof(SpeechPacket));
+    if(!queue_||!proofQueue_||!speechQueue_)return false;
     BLEDevice::init("XUNA");auto* server=BLEDevice::createServer();server->setCallbacks(&serverCallbacks_);
-    // Default createService budget is 15 handles; this service needs 22 (service,
-    // 10 characteristics × 2, status CCCD). Too few silently drops 000b/000c.
+    // Default createService budget is 15 handles; this service needs 26 (service,
+    // 12 characteristics × 2, status CCCD). Too few silently drops 000b/000c.
     auto* service=server->createService(BLEUUID(kService),32);
     auto* caps=service->createCharacteristic("7a6e0002-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ);
     // byte 3 bit 0: Identity V2 device proof (7a6e000d); bit 1: personality projection (7a6e000e).
     // byte 3 bit 2: conversation signal (opcode 8, PE-4c); bit 3: personality control (opcode 9, PE-4d).
     // byte 3 bit 4: knowledge domains (7a6e000f, opcode 10, KD-2).
+    // byte 3 bit 5: speech subtitles (7a6e0010, write only, SpeechBubble.h).
     // byte 4 bits 4–7: Track A variant preview (opcode 1 args 4–7).
-    uint8_t b[8]={1,8,0xbf,0x1f,0xff,3,0x60,0x09};caps->setValue(b,sizeof(b));
+    uint8_t b[8]={1,8,0xbf,0x3f,0xff,3,0x60,0x09};caps->setValue(b,sizeof(b));
     auto* command=service->createCharacteristic("7a6e0003-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_WRITE);command->setCallbacks(&writeCallbacks_);
     status_=service->createCharacteristic("7a6e0004-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ|BLECharacteristic::PROPERTY_NOTIFY);status_->addDescriptor(new BLE2902());
     lifeStatus_=service->createCharacteristic("7a6e0005-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ);
@@ -102,6 +120,8 @@ class BleManager {
     proofChar_->setCallbacks(&proofCallbacks_);
     personality_=service->createCharacteristic("7a6e000e-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ);
     knowledge_=service->createCharacteristic("7a6e000f-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ);
+    auto* speech=service->createCharacteristic("7a6e0010-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_WRITE);
+    speech->setCallbacks(&speechCallbacks_);
     {uint8_t idle[DeviceProof::kResponseSize]={1,uint8_t(DeviceProof::kResponseSize)};proofChar_->setValue(idle,sizeof(idle));}
     publish(0,0,0,PetState::Idle,0);service->start();
     auto* adv=BLEDevice::getAdvertising();adv->addServiceUUID(kService);adv->setScanResponse(true);
@@ -156,6 +176,17 @@ class BleManager {
     if(std::memcmp(lastKnowledge_,know,sizeof(know))){std::memcpy(lastKnowledge_,know,sizeof(know));knowledge_->setValue(know,sizeof(know));}
     uint8_t id[IdentityCodec::kSize];IdentityCodec::encode(identity,adapter.generation(),id);
     if(std::memcmp(lastIdentity_,id,sizeof(id))){std::memcpy(lastIdentity_,id,sizeof(id));identity_->setValue(id,sizeof(id));}
+    // Speech text is display only: it never reaches the adapter, and only
+    // its size is logged.
+    SpeechPacket chunk;
+    while(xQueueReceive(speechQueue_,&chunk,0)==pdTRUE){
+      if(chunk.session!=session||!connected_)continue;
+      const auto result=speech_.feed(chunk.bytes,chunk.size);
+      if(result==SpeechTextAssembler::Result::Ready)speechPending_=1;
+      else if(result==SpeechTextAssembler::Result::Cleared)speechPending_=2;
+      if(result!=SpeechTextAssembler::Result::Partial)
+        Serial.printf("speech_text result=%u bytes=%u\n",unsigned(result),unsigned(std::strlen(speech_.text())));
+    }
     ProofPacket proofRequest;
     if(xQueueReceive(proofQueue_,&proofRequest,0)==pdTRUE&&proofRequest.session==session&&connected_&&
        proof_.accept(proofRequest.bytes,proofRequest.size))publishProof(signer);
@@ -167,6 +198,10 @@ class BleManager {
     // Publish only after all read projections reflect the committed command.
     if(reply)publish(1,replyId,replyResult,replyState,now);
     return interacted;
+  }
+  // 0 nothing new, 1 show `text`, 2 clear; each text is handed over once.
+  uint8_t takeSpeech(const char*& text) {
+    const uint8_t pending=speechPending_;speechPending_=0;text=speech_.text();return pending;
   }
   void stateChanged(PetState state,uint32_t now) {
     const auto s=static_cast<uint8_t>(state);if(s!=lastState_){lastState_=s;++sequence_;publish(2,0,0,state,now);}

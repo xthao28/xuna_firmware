@@ -32,6 +32,19 @@ static_assert(xuna::scene::kFrameCount == xuna::VariantPlayer::kBaseFrames &&
               xuna::scene::kVariantFrames == xuna::VariantPlayer::kFramesPerVariant,
               "Track A asset must match VariantPlayer and VisualVariant");
 static_assert(xuna::scene::kGlassW <= 255 && xuna::scene::kGlassH <= 255, "Glass fits WindowWeather");
+namespace {
+// Speech bubble region: right of the window, above the pet canvas. It covers
+// the effect region, so effects pause while it shows. The tail points at the
+// middle of the pet canvas.
+constexpr int kSpeechX=90,kSpeechY=2,kSpeechW=228,kSpeechH=69;
+constexpr int kSpeechTailX=xuna::scene::kAnchorX+xuna::scene::kSpriteWidth/2-kSpeechX;
+constexpr uint16_t kSpeechTextW=kSpeechW-2*xuna::bubble::kPadX;
+}
+static_assert(kSpeechX >= xuna::scene::kWindowX + xuna::scene::kWindowW &&
+              kSpeechY + kSpeechH <= xuna::scene::kAnchorY && kSpeechX + kSpeechW <= xuna::scene::kWidth,
+              "Speech bubble must stay clear of the window and the pet canvas");
+static_assert(xuna::bubble::kPadTop + xuna::SpeechBubble::kLinesPerPage * 18 + xuna::bubble::kPadBottom +
+              xuna::bubble::kTail <= kSpeechH, "Three lines of the 14 px font must fit the bubble");
 namespace xuna {
 bool DisplayManager::begin() {
   pinMode(kPowerPin, OUTPUT); digitalWrite(kPowerPin, HIGH);
@@ -66,7 +79,8 @@ void DisplayManager::setBacklight(uint8_t level){
 }
 void DisplayManager::update(uint32_t now,PetState state){
   if(!region_)return;
-  setBacklight(backlight_.update(now,state,cardOpen()));
+  const int speechPage=speech_.page(now);
+  setBacklight(backlight_.update(now,state,cardOpen()||speechPage>=0));
   if(cardOpen()){
     if(uint32_t(now-cardAt_)>=cardUntil_)closeCard();
     return; // nothing else draws over a card
@@ -77,8 +91,9 @@ void DisplayManager::update(uint32_t now,PetState state){
   if(backdrop_==Backdrop::Rain&&weather_.stepRain(now,random_))windowDirty=true;
   if(backdrop_==Backdrop::Night&&weather_.stepStars(now,scene::kStarCount,random_))windowDirty=true;
   if(windowDirty){drawWindow();sceneDrawn=true;}
+  if(speechPage!=drawnSpeechPage_){drawSpeech(speechPage);sceneDrawn=true;}
   const EffectSample sample=effect_.sample(now);
-  if(sample!=drawnEffect_){drawEffect(sample);sceneDrawn=true;}
+  if(drawnSpeechPage_<0&&(!effectValid_||sample!=drawnEffect_)){drawEffect(sample);sceneDrawn=true;}
   if(sceneDrawn){const uint32_t elapsed=micros()-sceneStart;if(elapsed>maxSceneUs_)maxSceneUs_=elapsed;}
   const uint8_t base=visual_.frame(now,state,random_);  // keeps the base timing either way
   const int variantFrame=variant_.frame(now,state,visual_.interval());
@@ -130,7 +145,27 @@ void DisplayManager::drawEffect(const EffectSample& sample){
     }
   }
   lcd_.pushImage(scene::kEffectX,scene::kEffectY,scene::kEffectW,scene::kEffectH,effect_buf_);
-  drawnEffect_=sample;
+  drawnEffect_=sample;effectValid_=true;
+}
+bool DisplayManager::showSpeech(const char* text,uint32_t now){
+  if(!region_)return false;
+  if(!speechBuf_)speechBuf_=static_cast<uint16_t*>(heap_caps_malloc(kSpeechW*kSpeechH*2,MALLOC_CAP_SPIRAM));
+  if(!speechBuf_)return false;
+  speech_.show(text,ui::kFontValue,kSpeechTextW,now);
+  drawnSpeechPage_=-2; // redraw even when the page number is unchanged
+  return true;
+}
+// Page -1 restores the scene behind the bubble and lets the effect draw again.
+void DisplayManager::drawSpeech(int page){
+  if(page>=0&&drawnSpeechPage_<0)drawEffect(EffectSample{EffectKind::None,0,false}); // clear rows below the bubble
+  if(speechBuf_){
+    for(int y=0;y<kSpeechH;++y)for(int x=0;x<kSpeechW;++x)
+      speechBuf_[y*kSpeechW+x]=pgm_read_word(scene::kBackground+(kSpeechY+y)*scene::kWidth+kSpeechX+x);
+    if(page>=0){Canvas canvas{speechBuf_,uint16_t(kSpeechW),uint16_t(kSpeechH)};renderSpeechBubble(canvas,ui::kFontValue,speech_,page,kSpeechTailX);}
+    lcd_.pushImage(kSpeechX,kSpeechY,kSpeechW,kSpeechH,speechBuf_);
+  }
+  if(page<0)effectValid_=false;
+  drawnSpeechPage_=page;
 }
 namespace {
 const CardFonts kCardFonts{ui::kFontTitle,ui::kFontValue,ui::kFontLabel};
@@ -168,7 +203,7 @@ void DisplayManager::closeCard(){
   if(!cardOpen())return;
   cardUntil_=0;
   lcd_.pushImage(0,0,scene::kWidth,scene::kHeight,scene::kBackground);
-  windowValid_=false;lastFrame_=255;
+  windowValid_=false;lastFrame_=255;effectValid_=false;drawnSpeechPage_=-1;
   drawnEffect_=EffectSample{EffectKind::None,0,false};
 }
 }

@@ -187,6 +187,14 @@ void loop() {
   const xuna::IdentityRecord* readyIdentity=
       identity.state()==xuna::IdentityState::Ready ? &identity.record() : nullptr;
   if (bleReady && ble.update(adapter,readyIdentity,deviceKey,now,displayReady&&lifeReady))localBehavior.activity(now);
+  if (bleReady && displayReady) {
+    const char* said=nullptr;
+    switch (ble.takeSpeech(said)) {
+      case 1: display.showSpeech(said, now); break;
+      case 2: display.clearSpeech(); break;
+      default: break;
+    }
+  }
   const auto events = input.update(now);
   // While a card is shown, any button only closes it.
   const bool anyButton=events.happy||events.idle||events.happyHold||events.idleHold||events.bothHold;
