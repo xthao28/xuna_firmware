@@ -6,7 +6,7 @@
 namespace xuna {
 
 enum class IdentityWireState : uint8_t { Egg=0, Ready=1, Safe=2 };
-enum class GrowthWireStage : uint8_t { Egg=0, Newborn=1, Child=2, Mature=3 };
+enum class GrowthWireStage : uint8_t { Egg=0, Newborn=1 };
 enum class ClockWireQuality : uint8_t { Unknown=0, Approximate=1, Synced=2 };
 enum class BirthWireQuality : uint8_t { Unknown=0, Synced=2 };
 enum class IdentityWireOrigin : uint8_t { None=0, Device=1, App=2, Migrated=3 };
@@ -41,7 +41,7 @@ class LifecycleCodec {
     const uint8_t clock=static_cast<uint8_t>(value.clock);
     const uint8_t birth=static_cast<uint8_t>(value.birth);
     const uint8_t origin=static_cast<uint8_t>(value.origin);
-    return identity<=2&&stage<=3&&clock<=2&&(birth==0||birth==2)&&origin<=3&&
+    return identity<=2&&stage<=1&&clock<=2&&(birth==0||birth==2)&&origin<=3&&
       value.hasBornAt==(birth==2);
   }
 };
