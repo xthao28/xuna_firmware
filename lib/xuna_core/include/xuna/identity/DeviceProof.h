@@ -12,7 +12,8 @@ namespace xuna {
 // with its ECDSA P-256 key. For Bind the payload is the device's own
 // uncompressed public key, so a proof cannot be replayed for another key.
 // Projection proofs are refused until the device can hash its own export.
-enum class ProofPurpose : uint8_t { Bind=1,Projection=2 };
+// Session (DC-4) is signed only for the board's own cloud connection, never over BLE.
+enum class ProofPurpose : uint8_t { Bind=1,Projection=2,Session=3 };
 enum class ProofStatus : uint8_t {
   Idle=0,Pending=1,Ok=2,InvalidRequest=3,UnsupportedPurpose=4,NotReady=5,Failed=6
 };

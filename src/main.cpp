@@ -195,7 +195,7 @@ void setup() {
   {
     xuna::NetConfig stored;
     const bool configured=netStore.load(stored);
-    netReady=net.begin(configured?&stored:nullptr);
+    netReady=net.begin(configured?&stored:nullptr,xuna::kFirmwareVersion);
     stored.wipe();
     Serial.printf("net configured=%u task=%u\n",configured?1u:0u,netReady?1u:0u);
   }
@@ -230,6 +230,10 @@ void loop() {
       Serial.printf("net settings op=%u saved=%u\n",unsigned(op),saved?1u:0u);
     }
     config.wipe();
+    static bool identified=false;
+    if (!identified && readyIdentity) { net.identify(readyIdentity->petId); identified=true; }
+    // One session proof per cloud connection, signed here: DeviceKey is not shared with core 0.
+    net.serviceSigning(deviceKey,readyIdentity?readyIdentity->petId:nullptr,adapter.generation());
     ble.publishNet(net.status());
   }
 #endif
