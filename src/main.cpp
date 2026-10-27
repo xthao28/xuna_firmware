@@ -15,6 +15,13 @@
 #ifdef XUNA_E14
 #include "E14Diagnostics.h"
 #endif
+#ifdef XUNA_NET
+#if defined(XUNA_E14) && XUNA_E14
+#error "XUNA_NET and the E14 network probe both drive Wi-Fi; build one of them"
+#endif
+#include "NetConfigStore.h"
+#include "NetManager.h"
+#endif
 
 // Recovery and urgent commits stage several KB; ESP-IDF reports high water in bytes.
 SET_LOOP_TASK_STACK_SIZE(16384)
@@ -37,6 +44,11 @@ xuna::ScenePreference scenePreference;
 xuna::SceneMode sceneMode = xuna::SceneMode::Auto;
 #ifdef XUNA_E14
 xuna::E14Diagnostics e14;  // E14 gate metrics; XUNA_E14=1 also starts the network probe
+#endif
+#ifdef XUNA_NET
+xuna::NetConfigStore netStore;  // DC-2: Wi-Fi settings written by the app over BLE
+xuna::NetManager net;
+bool netReady = false;
 #endif
 bool bleReady = false, lifeReady = false, persistReady = false;
 bool displayReady = false;
@@ -179,6 +191,15 @@ void setup() {
     Serial.println();
     if(!deviceKey.ready())Serial.println("ERROR: device key unavailable; proofs report not_ready");
   }
+#ifdef XUNA_NET
+  {
+    xuna::NetConfig stored;
+    const bool configured=netStore.load(stored);
+    netReady=net.begin(configured?&stored:nullptr);
+    stored.wipe();
+    Serial.printf("net configured=%u task=%u\n",configured?1u:0u,netReady?1u:0u);
+  }
+#endif
   logMemory();
 #ifdef XUNA_E14
   e14.begin(millis());
@@ -199,6 +220,19 @@ void loop() {
   const xuna::IdentityRecord* readyIdentity=
       identity.state()==xuna::IdentityState::Ready ? &identity.record() : nullptr;
   if (bleReady && ble.update(adapter,readyIdentity,deviceKey,now,displayReady&&lifeReady))localBehavior.activity(now);
+#ifdef XUNA_NET
+  if (bleReady && netReady) {
+    xuna::NetOp op=xuna::NetOp::None;xuna::NetConfig config;
+    if (ble.takeNetConfig(op,config)) {
+      // Settings change only on the owner's request; the life snapshot is untouched.
+      const bool saved = op==xuna::NetOp::Set ? netStore.save(config) : netStore.erase();
+      if (op==xuna::NetOp::Set) net.apply(config); else net.forget();
+      Serial.printf("net settings op=%u saved=%u\n",unsigned(op),saved?1u:0u);
+    }
+    config.wipe();
+    ble.publishNet(net.status());
+  }
+#endif
   if (bleReady && displayReady) {
     const char* said=nullptr;
     switch (ble.takeSpeech(said)) {
