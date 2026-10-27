@@ -9,6 +9,7 @@
 #include <xuna/life/LifeCore.h>
 #include <xuna/persist/SnapshotStore.h>
 #include <xuna/personality/PersonalityProjection.h>
+#include <xuna/knowledge/KnowledgeProjection.h>
 
 namespace xuna {
 
@@ -85,7 +86,7 @@ class V1LifeCoreAdapter {
   uint8_t handle(const uint8_t* bytes, size_t size, uint32_t now, bool ready,
                  uint32_t& id) {
     const BleCommand c = parseCommand(bytes, size, enhancedLearning_, true, false, enhancedLearning_,
-                                        enhancedLearning_);
+                                        enhancedLearning_, enhancedLearning_);
     id = c.id;
     uint8_t result = c.error;
     const int duplicate = size <= kMaxPacket ? cache_.find(bytes, size) : -1;
@@ -179,6 +180,13 @@ class V1LifeCoreAdapter {
   void encodePersonality(bool seeded, uint8_t* bytes) const {
     PersonalityProjection::encode(core_.personality(), seeded, bytes);
   }
+
+  // Knowledge projection (7a6e000f, KD-2, 64 bytes).
+  void encodeKnowledge(uint8_t* bytes) const {
+    const bool trusted = core_.clock().quality(core_.mono64()) != ClockQuality::Unknown;
+    KnowledgeProjection::encode(core_.knowledge(), trusted, bytes);
+  }
+  const KnowledgeProfile& knowledge() const { return core_.knowledge(); }
 
   // Last durable snapshot generation (Identity V1 projection ordering key).
   uint32_t generation() const { return core_.snapshot().generation; }
@@ -316,6 +324,15 @@ class V1LifeCoreAdapter {
         const LifeCoreEvent event(LifeCoreEventKind::Conversation, c.id, 0, c.arg);
         step(event, now);
         return kOk;
+      }
+      case 10: {
+        switch (core_.handleKnowledge(c.arg, c.slot, c.slot2, c.factKey, now)) {
+          case LifeCore::KnowledgeCommandResult::Applied: return kOk;
+          case LifeCore::KnowledgeCommandResult::Duplicate: return kOk;
+          case LifeCore::KnowledgeCommandResult::Invalid: return kInvalidArgument;
+          case LifeCore::KnowledgeCommandResult::NotReady: return kNotReady;
+        }
+        return kInvalidArgument;
       }
     }
     return kUnknownOpcode;

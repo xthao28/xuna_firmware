@@ -21,6 +21,7 @@ class BleManager {
   BLECharacteristic* identity_=nullptr;
   BLECharacteristic* proofChar_=nullptr;
   BLECharacteristic* personality_=nullptr;
+  BLECharacteristic* knowledge_=nullptr;
   BLECharacteristic* memories_[2]={nullptr,nullptr};
   std::atomic<bool> connected_{false};
   std::atomic<uint32_t> session_{0};
@@ -29,6 +30,7 @@ class BleManager {
   bool advertising_=true;
   uint8_t lastLife_[20]={},lastMemories_[2][20]={},lastExplanation_[20]={},lastIdentity_[IdentityCodec::kSize]={};
   uint8_t lastPersonality_[PersonalityProjection::kSize]={};
+  uint8_t lastKnowledge_[KnowledgeProjection::kSize]={};
   std::atomic<uint16_t> central_{0xffff};
   class ServerCallbacks: public BLEServerCallbacks {
     BleManager& owner_;
@@ -86,8 +88,9 @@ class BleManager {
     auto* caps=service->createCharacteristic("7a6e0002-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ);
     // byte 3 bit 0: Identity V2 device proof (7a6e000d); bit 1: personality projection (7a6e000e).
     // byte 3 bit 2: conversation signal (opcode 8, PE-4c); bit 3: personality control (opcode 9, PE-4d).
+    // byte 3 bit 4: knowledge domains (7a6e000f, opcode 10, KD-2).
     // byte 4 bits 4–7: Track A variant preview (opcode 1 args 4–7).
-    uint8_t b[8]={1,8,0xbf,0x0f,0xff,3,0x60,0x09};caps->setValue(b,sizeof(b));
+    uint8_t b[8]={1,8,0xbf,0x1f,0xff,3,0x60,0x09};caps->setValue(b,sizeof(b));
     auto* command=service->createCharacteristic("7a6e0003-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_WRITE);command->setCallbacks(&writeCallbacks_);
     status_=service->createCharacteristic("7a6e0004-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ|BLECharacteristic::PROPERTY_NOTIFY);status_->addDescriptor(new BLE2902());
     lifeStatus_=service->createCharacteristic("7a6e0005-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ);
@@ -98,6 +101,7 @@ class BleManager {
     proofChar_=service->createCharacteristic("7a6e000d-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ|BLECharacteristic::PROPERTY_WRITE);
     proofChar_->setCallbacks(&proofCallbacks_);
     personality_=service->createCharacteristic("7a6e000e-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ);
+    knowledge_=service->createCharacteristic("7a6e000f-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ);
     {uint8_t idle[DeviceProof::kResponseSize]={1,uint8_t(DeviceProof::kResponseSize)};proofChar_->setValue(idle,sizeof(idle));}
     publish(0,0,0,PetState::Idle,0);service->start();
     auto* adv=BLEDevice::getAdvertising();adv->addServiceUUID(kService);adv->setScanResponse(true);
@@ -128,6 +132,8 @@ class BleManager {
                       adapter.last().conversationApplied?1u:0u);
       if(p.size>=7&&p.bytes[1]==9)
         Serial.printf("personality_control arg=%u result=%u\n",unsigned(p.bytes[6]),result);
+      if(p.size>=7&&p.bytes[1]==10)
+        Serial.printf("knowledge arg=%u slot=%u result=%u\n",unsigned(p.bytes[6]),unsigned(p.bytes[8]),result);
       if(p.size>=2&&p.bytes[1]==5){
         const auto quality=adapter.clock().quality(adapter.monoNow());
         const auto part=adapter.clock().dayPart(adapter.monoNow());
@@ -146,6 +152,8 @@ class BleManager {
     if(std::memcmp(lastExplanation_,b,sizeof(b))){std::memcpy(lastExplanation_,b,sizeof(b));explanation_->setValue(b,sizeof(b));}
     uint8_t persona[PersonalityProjection::kSize];adapter.encodePersonality(identity!=nullptr,persona);
     if(std::memcmp(lastPersonality_,persona,sizeof(persona))){std::memcpy(lastPersonality_,persona,sizeof(persona));personality_->setValue(persona,sizeof(persona));}
+    uint8_t know[KnowledgeProjection::kSize];adapter.encodeKnowledge(know);
+    if(std::memcmp(lastKnowledge_,know,sizeof(know))){std::memcpy(lastKnowledge_,know,sizeof(know));knowledge_->setValue(know,sizeof(know));}
     uint8_t id[IdentityCodec::kSize];IdentityCodec::encode(identity,adapter.generation(),id);
     if(std::memcmp(lastIdentity_,id,sizeof(id))){std::memcpy(lastIdentity_,id,sizeof(id));identity_->setValue(id,sizeof(id));}
     ProofPacket proofRequest;

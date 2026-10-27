@@ -23,9 +23,12 @@ enum class PersistClass : uint8_t { Ram,Log,Aggregate,ConditionalLog,Counter,Log
  X(FactDeleted,0x52,Memory,Tombstone,true) \
  X(MemoryForgotten,0x53,Memory,Log,true) \
  X(PatternConsolidated,0x54,Memory,MemoryStore,false) \
- X(GrowthEligibilityReached,0x60,Growth,Log,false) \
- X(GrowthStageChanged,0x61,Growth,SnapshotJournal,true) \
+ X(GrowthEligibilityReached,0x60,Growth,Log,false) /* obsolete 2026-10-27, never reuse */ \
+ X(GrowthStageChanged,0x61,Growth,SnapshotJournal,true) /* obsolete 2026-10-27, never reuse */ \
  X(SkillAcquired,0x62,Growth,SnapshotJournal,true) \
+ X(KnowledgeSlotChanged,0x63,Growth,LogSnapshot,true) \
+ X(KnowledgeEvidenceChanged,0x64,Growth,LogSnapshot,true) \
+ X(KnowledgeLevelChanged,0x65,Growth,SnapshotJournal,true) \
  X(TraitUnlocked,0x70,Evolution,SnapshotJournal,true) \
  X(TraitConsolidated,0x71,Evolution,SnapshotJournal,true) \
  X(ConversationSessionEnded,0x80,Conversation,Aggregate,false) \

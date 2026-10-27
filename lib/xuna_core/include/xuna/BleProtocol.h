@@ -4,9 +4,9 @@
 #include <xuna/LifeEngine.h>
 namespace xuna {
 struct BleCommand {
-  uint32_t id=0, target=0, utcSeconds=0;
+  uint32_t id=0, target=0, utcSeconds=0, factKey=0;
   int16_t tzOffsetMin=0;
-  uint8_t opcode=0,arg=0,source=0,error=0,contextKey=0,action=0;
+  uint8_t opcode=0,arg=0,source=0,error=0,contextKey=0,action=0,slot=0,slot2=0;
 };
 // Opcode 6 StatedPreference (plan §11.6, 12 bytes: arg = polarity, source 2 =
 // confirmed text, contextKey @8, actionId @9, reserved u16 @10 = 0) is parsed
@@ -19,13 +19,16 @@ struct BleCommand {
 // capability byte 3 bit 2) is parsed only when `conversation` is set.
 // Opcode 9 PersonalityControl (PE-4d, 8 bytes, arg 1 = undo the newest
 // change, 2 = reset, source 0, capability byte 3 bit 3) rides the same flag.
+// Opcode 10 KnowledgeCommand (KD-2, 16 bytes: arg 1..7 sub-op, source 0,
+// slot @8, slot2 @9, reserved u16 @10 = 0, factKey @12..15) parsed when `knowledge` is set.
 inline BleCommand parseCommand(const uint8_t* b,size_t n,
                                bool statedPreference=false,
                                bool timeSync=false,bool hatch=false,
                                bool variantPreview=false,
-                               bool conversation=false) {
+                               bool conversation=false,
+                               bool knowledge=false) {
   BleCommand c; if(n>=6)c.id=LifeEngine::get32(b+2);
-  if(n!=8&&n!=12&&(!timeSync||n!=16)){c.error=2;return c;}
+  if(n!=8&&n!=12&&((!timeSync&&!knowledge)||n!=16)){c.error=2;return c;}
   if(b[0]!=1){c.error=1;return c;}
   c.opcode=b[1];c.arg=b[6];c.source=b[7];
   if(!c.id){c.error=4;return c;}
@@ -34,14 +37,20 @@ inline BleCommand parseCommand(const uint8_t* b,size_t n,
   const bool hatchCommand=hatch&&c.opcode==7;
   const bool talk=conversation&&c.opcode==8;
   const bool control=conversation&&c.opcode==9;
-  if((c.opcode<1||c.opcode>4)&&!stated&&!sync&&!hatchCommand&&!talk&&!control){c.error=3;return c;}
-  const size_t expected=sync?16:(c.opcode==3||stated?12:8);
+  const bool know=knowledge&&c.opcode==10;
+  if((c.opcode<1||c.opcode>4)&&!stated&&!sync&&!hatchCommand&&!talk&&!control&&!know){c.error=3;return c;}
+  const size_t expected=(sync||know)?16:(c.opcode==3||stated?12:8);
   if(n!=expected){c.error=2;return c;}
   if(c.opcode==3)c.target=LifeEngine::get32(b+8);
   if(stated){c.contextKey=b[8];c.action=b[9];}
   if(sync){
     c.source=b[6];c.arg=0;c.utcSeconds=LifeEngine::get32(b+8);
     c.tzOffsetMin=static_cast<int16_t>(uint16_t(b[12])|(uint16_t(b[13])<<8));
+  }
+  if(know){
+    c.slot=b[8];
+    c.slot2=b[9];
+    c.factKey=LifeEngine::get32(b+12);
   }
   if((c.opcode==1&&(c.arg>(variantPreview?7:3)||c.source))||(c.opcode==2&&(c.arg>1||c.source))||(c.opcode==3&&(c.arg>1||c.source<1||c.source>2||!c.target))||(c.opcode==4&&(c.arg||c.source)))c.error=4;
   if(stated&&(c.arg>1||c.source!=2||b[10]||b[11]))c.error=4;
@@ -50,6 +59,12 @@ inline BleCommand parseCommand(const uint8_t* b,size_t n,
   if(hatchCommand&&(c.arg||c.source))c.error=4;
   if(talk&&(c.arg<1||c.arg>6||c.source))c.error=4;
   if(control&&(c.arg<1||c.arg>2||c.source))c.error=4;
+  if(know){
+    if(c.source!=0||b[10]!=0||b[11]!=0||c.arg<1||c.arg>7||c.slot>=5)c.error=4;
+    else if(c.arg<=4&&(c.slot2!=0||c.factKey!=0))c.error=4;
+    else if((c.arg==5||c.arg==6)&&(c.slot2!=0||c.factKey==0))c.error=4;
+    else if(c.arg==7&&(c.slot2>=5||c.slot2==c.slot||c.factKey==0))c.error=4;
+  }
   return c;
 }
 class CommandCache {

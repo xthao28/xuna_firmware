@@ -13,6 +13,9 @@
 #include <xuna/persist/SnapshotStore.h>
 #include <xuna/personality/Leaning.h>
 #include <xuna/personality/Personality.h>
+#include <xuna/knowledge/KnowledgeCodec.h>
+#include <xuna/knowledge/KnowledgeProfile.h>
+#include <xuna/knowledge/KnowledgeProjection.h>
 #include <xuna/personality/PersonalityCodec.h>
 #include <xuna/time/ClockModel.h>
 #include <xuna/visual/VisualIntent.h>
@@ -141,7 +144,14 @@ class LifeCore {
   }
 
   // Adopt the boot-recovered snapshot (Ok/Migrated) before begin().
-  void restore(const LifeSnapshotV2& snapshot) { learner_.restore(snapshot); }
+  void restore(const LifeSnapshotV2& snapshot) {
+    learner_.restore(snapshot);
+    knowledge_.clearAll();
+    const SnapshotKnowledge& stored = snapshot.knowledge;
+    if (stored.length) {
+      KnowledgeCodec::load(stored.bytes, stored.length, knowledge_);
+    }
+  }
 
   // Personality: the pet's IdentityRecord seed (0 = no identity yet, neutral
   // genome), after restore() and before begin(). The restored snapshot's
@@ -278,9 +288,11 @@ class LifeCore {
   // ERROR_SAFE is read-only: nothing is written.
   bool forget() {
     if (!started_ || activity_.state() == Activity::ErrorSafe) return false;
-    if (!learner_.forget(commit_)) return false;  // commits without section 5
+    if (!learner_.forget(commit_)) return false;  // commits without section 5 & 13
     personality_.forget();
     syncPersonality();
+    knowledge_.clearAll();
+    syncKnowledge();
     return true;
   }
 
@@ -303,6 +315,48 @@ class LifeCore {
     learner_.state().personality = stored;
     syncedRevision_ = personality_.revision();
     return PersonalityControlResult::Applied;
+  }
+
+  // Knowledge domains (BLE opcode 10, KD-2): commit-first slot & evidence control.
+  // Idempotent add returns Duplicate (mapped to Ok by adapter).
+  enum class KnowledgeCommandResult : uint8_t { Applied = 0, Duplicate, Invalid, NotReady };
+  KnowledgeCommandResult handleKnowledge(uint8_t subop, uint8_t slot, uint8_t slot2,
+                                         uint32_t factKey, MonoMs now) {
+    if (!started_ || activity_.state() == Activity::ErrorSafe)
+      return KnowledgeCommandResult::NotReady;
+    extendMono(now);
+    const uint16_t today = clock_.localDayIndex(mono64_);
+
+    KnowledgeProfile staged = knowledge_;
+    KnowledgeProfile::Result res = KnowledgeProfile::Result::Invalid;
+    switch (subop) {
+      case 1: res = staged.open(slot); break;
+      case 2: res = staged.setState(slot, SlotState::Active); break;
+      case 3: res = staged.setState(slot, SlotState::Resting); break;
+      case 4: res = staged.clear(slot); break;
+      case 5: res = staged.add(slot, factKey, today); break;
+      case 6: res = staged.remove(slot, factKey); break;
+      case 7: res = staged.move(slot, slot2, factKey, today); break;
+      default: return KnowledgeCommandResult::Invalid;
+    }
+
+    if (res == KnowledgeProfile::Result::Duplicate) {
+      return KnowledgeCommandResult::Duplicate;
+    }
+    if (res != KnowledgeProfile::Result::Ok) {
+      return KnowledgeCommandResult::Invalid;
+    }
+
+    LifeSnapshotV2 snapshot = learner_.state();
+    SnapshotKnowledge& stored = snapshot.knowledge;
+    stored.length = static_cast<uint16_t>(
+        KnowledgeCodec::encode(staged, stored.bytes, sizeof(stored.bytes)));
+
+    if (commit_ != 0 && !commit_->commit(snapshot)) return KnowledgeCommandResult::NotReady;
+    knowledge_ = staged;
+    learner_.state().knowledge = stored;
+    learner_.state().generation = snapshot.generation;
+    return KnowledgeCommandResult::Applied;
   }
 
   // Track A: the variant to play, once (the display adapter takes it).
@@ -329,6 +383,7 @@ class LifeCore {
   }
   const ActivityFsm& activity() const { return activity_; }
   const Personality& personality() const { return personality_; }
+  const KnowledgeProfile& knowledge() const { return knowledge_; }
 
   // PE-4a gains (Life Lab compares them; the board keeps the defaults).
   void setLeaning(const LeaningConfig& config) { leaning_ = config; }
@@ -563,6 +618,12 @@ class LifeCore {
     syncedRevision_ = personality_.revision();
   }
 
+  void syncKnowledge() {
+    SnapshotKnowledge& stored = learner_.state().knowledge;
+    stored.length = static_cast<uint16_t>(
+        KnowledgeCodec::encode(knowledge_, stored.bytes, sizeof(stored.bytes)));
+  }
+
   // Wrap-safe 32 → 64-bit extension; callers pass non-decreasing millis().
   void extendMono(MonoMs now) {
     mono64_ += static_cast<MonoMs>(now - lastNow_);
@@ -609,6 +670,7 @@ class LifeCore {
   Needs needs_;
   Mood mood_;
   Personality personality_;
+  KnowledgeProfile knowledge_;
   LeaningConfig leaning_;
   uint32_t syncedRevision_ = 0xFFFFFFFFU;
   static constexpr uint16_t kExploreVariant = 32768;  // explore ≥ ½ looks around [P]

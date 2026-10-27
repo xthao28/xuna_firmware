@@ -58,6 +58,15 @@ class ClockModel {
     if(minute<1020)return DayPart::Afternoon;
     return DayPart::Evening;
   }
+  uint16_t localDayIndex(uint64_t mono) const {
+    if (quality(mono) == ClockQuality::Unknown) return 0;
+    const int64_t utc = utcMs(mono);
+    if (utc < kEpochUtcMs) return 0;
+    const int64_t localMinute = (utc - kEpochUtcMs) / 60000 + offset_;
+    if (localMinute < 0) return 0;
+    const int64_t day = localMinute / 1440 + 1;
+    return static_cast<uint16_t>(day > 65535 ? 65535 : day);
+  }
   uint32_t lastTrustedUtcMinute() const { return lastTrusted_; }
   int16_t tzOffsetMin() const { return offset_; }
   TimeSource source() const { return source_; }

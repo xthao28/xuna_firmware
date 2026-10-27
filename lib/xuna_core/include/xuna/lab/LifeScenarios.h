@@ -4,6 +4,7 @@
 #include <cstring>
 
 #include <xuna/base/Random.h>
+#include <xuna/knowledge/KnowledgeProfile.h>
 #include <xuna/lab/BoardLab.h>
 #include <xuna/learning/LearnerV3Codec.h>
 
@@ -361,6 +362,56 @@ class LifeScenarios {
     if (lab.core().preferred(LearnInteraction::QuietRequest) != liked)
       return fail(r, "quiet preference did not follow the reactions");
     return finish(r, lab);
+  }
+
+  struct KnowledgeDualReport {
+    bool passed = false;
+    const char* failure = "";
+    KnowledgeProfile steady;  // Regular teaching across 4 days: reaches level 2
+    KnowledgeProfile cram;    // Cramming 25 facts in 1 day: reaches only level 1
+  };
+
+  // M06 KD-1: Two teaching histories on two profiles.
+  // Profile A: regular teaching over 4 days (12 facts) reaches level 2.
+  // Profile B: cramming 25 facts in a single day reaches only level 1.
+  static KnowledgeDualReport knowledgeTwoHistories() {
+    KnowledgeDualReport r;
+    // History A: Steady
+    if (r.steady.open(0) != KnowledgeProfile::Result::Ok) {
+      r.failure = "failed to open slot on steady";
+      return r;
+    }
+    // Day 1: 3 facts -> Level reaches 1 (facts=3 >= 3, days=1 >= 1)
+    r.steady.add(0, 0x101, 1);
+    r.steady.add(0, 0x102, 1);
+    r.steady.add(0, 0x103, 1);
+
+    // Day 2: 4 facts -> Level stays 1 (facts=7 < 10, days=2 < 3)
+    r.steady.add(0, 0x104, 2);
+    r.steady.add(0, 0x105, 2);
+    r.steady.add(0, 0x106, 2);
+    r.steady.add(0, 0x107, 2);
+
+    // Day 3: 3 facts -> Level reaches 2 (facts=10 >= 10, days=3 >= 3)
+    r.steady.add(0, 0x108, 3);
+    r.steady.add(0, 0x109, 3);
+    r.steady.add(0, 0x10a, 3);
+
+    // Day 4: 2 facts -> Level stays 2 (facts=12 < 25)
+    r.steady.add(0, 0x10b, 4);
+    r.steady.add(0, 0x10c, 4);
+
+    // History B: Cramming 25 facts on day 1
+    if (r.cram.open(0) != KnowledgeProfile::Result::Ok) {
+      r.failure = "failed to open slot on cram";
+      return r;
+    }
+    for (uint32_t k = 1; k <= 25; ++k) {
+      r.cram.add(0, 0x200 + k, 1);
+    }
+
+    r.passed = true;
+    return r;
   }
 
  private:

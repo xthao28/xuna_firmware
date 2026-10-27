@@ -576,6 +576,83 @@ void baseline_rejects_conversation_signal() {
   TEST_ASSERT_EQUAL_UINT32(0, rig.core.personality().evidence());
 }
 
+void enhanced_knowledge_command_flow_and_persistence() {
+  Rig rig(false, true);
+  putS01Pet(rig.store);
+  rig.boot(1000);
+  uint32_t id = 0;
+
+  // 1. Open slot 0 (arg 1, slot 0):
+  TEST_ASSERT_EQUAL_UINT8(0, rig.send("01 0a 01 00 00 00 01 00 00 00 00 00 00 00 00 00", 2000, id));
+  TEST_ASSERT_EQUAL_UINT32(1, id);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(SlotState::Active),
+                          static_cast<uint8_t>(rig.adapter.knowledge().slot(0).state));
+
+  // 2. Add fact 0x12345678 to slot 0 (arg 5, slot 0):
+  TEST_ASSERT_EQUAL_UINT8(0, rig.send("01 0a 02 00 00 00 05 00 00 00 00 00 78 56 34 12", 2001, id));
+  TEST_ASSERT_EQUAL_UINT8(1, rig.adapter.knowledge().slot(0).keyCount);
+  TEST_ASSERT_EQUAL_UINT32(0x12345678, rig.adapter.knowledge().slot(0).keys[0]);
+
+  // 3. Duplicate add returns 0 (idempotent):
+  TEST_ASSERT_EQUAL_UINT8(0, rig.send("01 0a 03 00 00 00 05 00 00 00 00 00 78 56 34 12", 2002, id));
+  TEST_ASSERT_EQUAL_UINT8(1, rig.adapter.knowledge().slot(0).keyCount);
+
+  // 4. Projection check:
+  uint8_t proj[KnowledgeProjection::kSize] = {};
+  rig.adapter.encodeKnowledge(proj);
+  TEST_ASSERT_EQUAL_UINT8(1, proj[0]);   // version
+  TEST_ASSERT_EQUAL_UINT8(64, proj[1]);  // size
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(SlotState::Active), proj[8]); // slot 0 state
+  TEST_ASSERT_EQUAL_UINT8(1, proj[10]);  // slot 0 facts
+
+  // 5. Reboot survives and restores slot 0 & fact:
+  Rig rebooted(false, true);
+  rebooted.store = rig.store;
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(LoadResult::Ok),
+                          static_cast<uint8_t>(rebooted.boot(3000)));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(SlotState::Active),
+                          static_cast<uint8_t>(rebooted.adapter.knowledge().slot(0).state));
+  TEST_ASSERT_EQUAL_UINT8(1, rebooted.adapter.knowledge().slot(0).keyCount);
+  TEST_ASSERT_EQUAL_UINT32(0x12345678, rebooted.adapter.knowledge().slot(0).keys[0]);
+
+  // 6. Clear slot 0 (arg 4, slot 0):
+  TEST_ASSERT_EQUAL_UINT8(0, rebooted.send("01 0a 04 00 00 00 04 00 00 00 00 00 00 00 00 00", 3001, id));
+  TEST_ASSERT_EQUAL_UINT8(static_cast<uint8_t>(SlotState::Empty),
+                          static_cast<uint8_t>(rebooted.adapter.knowledge().slot(0).state));
+  TEST_ASSERT_EQUAL_UINT8(0, rebooted.adapter.knowledge().slot(0).keyCount);
+}
+
+void baseline_rejects_knowledge_command() {
+  Rig rig;
+  putS01Pet(rig.store);
+  rig.boot(1000);
+  uint32_t id = 0;
+  // Baseline rejects opcode 10 with unknown opcode (3)
+  TEST_ASSERT_EQUAL_UINT8(3, rig.send("01 0a 60 00 00 00 01 00 00 00 00 00 00 00 00 00", 2000, id));
+}
+
+void knowledge_command_argument_validation() {
+  Rig rig(false, true);
+  putS01Pet(rig.store);
+  rig.boot(1000);
+  uint32_t id = 0;
+
+  // Invalid length: 12 bytes -> error 2
+  TEST_ASSERT_EQUAL_UINT8(2, rig.send("01 0a 70 00 00 00 01 00 00 00 00 00", 2000, id));
+  // Invalid sub-op (0) -> error 4
+  TEST_ASSERT_EQUAL_UINT8(4, rig.send("01 0a 71 00 00 00 00 00 00 00 00 00 00 00 00 00", 2001, id));
+  // Invalid sub-op (8) -> error 4
+  TEST_ASSERT_EQUAL_UINT8(4, rig.send("01 0a 72 00 00 00 08 00 00 00 00 00 00 00 00 00", 2002, id));
+  // Invalid slot (5) -> error 4
+  TEST_ASSERT_EQUAL_UINT8(4, rig.send("01 0a 73 00 00 00 01 00 05 00 00 00 00 00 00 00", 2003, id));
+  // Clear with key != 0 -> error 4
+  TEST_ASSERT_EQUAL_UINT8(4, rig.send("01 0a 74 00 00 00 04 00 00 00 00 00 01 00 00 00", 2004, id));
+  // Add with key == 0 -> error 4
+  TEST_ASSERT_EQUAL_UINT8(4, rig.send("01 0a 75 00 00 00 05 00 00 00 00 00 00 00 00 00", 2005, id));
+  // Move with slot2 == slot -> error 4
+  TEST_ASSERT_EQUAL_UINT8(4, rig.send("01 0a 76 00 00 00 07 00 01 01 00 00 01 00 00 00", 2006, id));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(enhanced_conversation_signal_is_felt_once);
@@ -598,5 +675,8 @@ RUN_TEST(spontaneous_choice_can_be_petted);
   RUN_TEST(active_lifetime_checkpoints_every_five_minutes);
   RUN_TEST(greeting_learning_keeps_v1_bytes_parseable);
   RUN_TEST(reserved_decision_ids_and_unsupported_opcodes_are_rejected);
+  RUN_TEST(enhanced_knowledge_command_flow_and_persistence);
+  RUN_TEST(baseline_rejects_knowledge_command);
+  RUN_TEST(knowledge_command_argument_validation);
   return UNITY_END();
 }
