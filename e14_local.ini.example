@@ -1,0 +1,8 @@
+; Copy to e14_local.ini (git-ignored) for the E14 run. Never commit the copy.
+; Quote values with spaces as in the SSID line; avoid " and \ in the password.
+[e14_local]
+build_flags =
+    '-D XUNA_E14_WIFI_SSID="Your WiFi"'
+    '-D XUNA_E14_WIFI_PASS="your-password"'
+    '-D XUNA_E14_HOST="192.168.1.20"'
+    -D XUNA_E14_PORT=8765

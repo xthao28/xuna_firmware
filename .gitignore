@@ -4,3 +4,8 @@ compile_commands.json
 .cache/
 .DS_Store
 *.exe
+# E14 local settings and the machine's pinned dev CA (DC-1)
+e14_local.ini
+include/E14DevCa.h
+logs/
+platformio-device-monitor-*.log

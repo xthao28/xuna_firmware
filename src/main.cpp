@@ -12,6 +12,9 @@
 #include "NvsSnapshotStore.h"
 #include "DeviceKey.h"
 #include "ScenePreference.h"
+#ifdef XUNA_E14
+#include "E14Diagnostics.h"
+#endif
 
 // Recovery and urgent commits stage several KB; ESP-IDF reports high water in bytes.
 SET_LOOP_TASK_STACK_SIZE(16384)
@@ -32,6 +35,9 @@ xuna::BleManager ble;
 xuna::DeviceKey deviceKey;
 xuna::ScenePreference scenePreference;
 xuna::SceneMode sceneMode = xuna::SceneMode::Auto;
+#ifdef XUNA_E14
+xuna::E14Diagnostics e14;  // E14 gate metrics; XUNA_E14=1 also starts the network probe
+#endif
 bool bleReady = false, lifeReady = false, persistReady = false;
 bool displayReady = false;
 uint32_t diagnosticsAt = 0, personaAt = 0;
@@ -174,6 +180,9 @@ void setup() {
     if(!deviceKey.ready())Serial.println("ERROR: device key unavailable; proofs report not_ready");
   }
   logMemory();
+#ifdef XUNA_E14
+  e14.begin(millis());
+#endif
   lastLoopUs = micros();
 }
 void loop() {
@@ -182,6 +191,9 @@ void loop() {
   if (gap > maxLoopGapUs) maxLoopGapUs = gap;
   lastLoopUs = loopUs;
   ++loops;
+#ifdef XUNA_E14
+  e14.loopGap(gap);
+#endif
   const uint32_t now = millis();
   adapter.tick(now);
   const xuna::IdentityRecord* readyIdentity=
@@ -262,7 +274,13 @@ void loop() {
   if(displayReady){
     display.setFramePeriod(style.framePeriodMs,now);
     display.setBackdrop(xuna::backdropFor(sceneMode,core.clock().dayPart(core.mono64())));
+#ifdef XUNA_E14
+    const uint32_t drawsBefore=display.draws(),drawStarted=micros();
+#endif
     display.update(now,animation.state());
+#ifdef XUNA_E14
+    if(display.draws()!=drawsBefore)e14.render(micros()-drawStarted);
+#endif
   }
   if (bleReady) ble.stateChanged(animation.state(), now);
   if(persistReady&&adapter.checkpointDue(now)){
@@ -282,6 +300,9 @@ void loop() {
     maxLoopGapUs = 0; loops = 0;
   }
   if (lifeReady && uint32_t(now - personaAt) >= 60000U) { logPersona(now, style); personaAt = now; }
+#ifdef XUNA_E14
+  e14.report(now,ble.e14Commands(),ble.e14NonOk(),ble.e14Dropped(),ble.e14MaxUs());
+#endif
   // Sleep what is left of the period (a slow pass, e.g. a card push, only yields).
   const uint32_t spentMs = (micros() - loopUs) / 1000U;
   if (spentMs < xuna::kLoopPeriodMs) delay(xuna::kLoopPeriodMs - spentMs);

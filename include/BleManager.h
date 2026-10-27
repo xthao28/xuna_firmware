@@ -13,7 +13,14 @@
 namespace xuna {
 class BleManager {
   static constexpr const char* kService="7a6e0001-8c44-4db6-9f61-2b7d5300a101";
+#ifdef XUNA_E14
+  // E14 (DC-1): write-callback time, queue drops and handling for the gate metrics.
+  struct Packet { uint8_t bytes[16];size_t size;uint32_t session;uint32_t atUs; };
+  std::atomic<uint32_t> e14Dropped_{0};
+  uint32_t e14Commands_=0,e14NonOk_=0,e14MaxUs_=0;
+#else
   struct Packet { uint8_t bytes[16];size_t size;uint32_t session; };
+#endif
   struct ProofPacket { uint8_t bytes[DeviceProof::kRequestSize];size_t size;uint32_t session; };
   struct SpeechPacket { uint8_t bytes[SpeechTextAssembler::kMaxFrame];size_t size;uint32_t session; };
   QueueHandle_t queue_=nullptr,proofQueue_=nullptr,speechQueue_=nullptr;
@@ -58,7 +65,12 @@ class BleManager {
       Packet p={};p.size=value.size();p.session=owner_.session_.load();
       for(size_t i=0;i<value.size()&&i<sizeof(p.bytes);++i)p.bytes[i]=value[i];
       // Overflow drops the request: client timeout must not auto-replay.
+#ifdef XUNA_E14
+      p.atUs=micros();
+      if(xQueueSend(owner_.queue_,&p,0)!=pdTRUE)++owner_.e14Dropped_;
+#else
       xQueueSend(owner_.queue_,&p,0);
+#endif
     }
   } writeCallbacks_{*this};
   class ProofCallbacks: public BLECharacteristicCallbacks {
@@ -197,12 +209,24 @@ class BleManager {
     }
     // Publish only after all read projections reflect the committed command.
     if(reply)publish(1,replyId,replyResult,replyState,now);
+#ifdef XUNA_E14
+    if(reply){
+      const uint32_t us=micros()-p.atUs;
+      ++e14Commands_;if(replyResult)++e14NonOk_;if(us>e14MaxUs_)e14MaxUs_=us;
+    }
+#endif
     return interacted;
   }
   // 0 nothing new, 1 show `text`, 2 clear; each text is handed over once.
   uint8_t takeSpeech(const char*& text) {
     const uint8_t pending=speechPending_;speechPending_=0;text=speech_.text();return pending;
   }
+#ifdef XUNA_E14
+  uint32_t e14Commands() const {return e14Commands_;}
+  uint32_t e14NonOk() const {return e14NonOk_;}
+  uint32_t e14Dropped() const {return e14Dropped_.load();}
+  uint32_t e14MaxUs() const {return e14MaxUs_;}
+#endif
   void stateChanged(PetState state,uint32_t now) {
     const auto s=static_cast<uint8_t>(state);if(s!=lastState_){lastState_=s;++sequence_;publish(2,0,0,state,now);}
   }
