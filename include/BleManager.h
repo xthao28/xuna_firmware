@@ -176,10 +176,11 @@ class BleManager {
     // byte 3 bit 5: speech subtitles (7a6e0010, write only, SpeechBubble.h).
     // byte 4 bits 4–7: Track A variant preview (opcode 1 args 4–7).
     // byte 3 bit 6: Wi-Fi setup 7a6e0011 + network projection 7a6e0012 (DC-2, XUNA_NET builds only).
+    // byte 3 bit 7: display brightness & screen sleep settings (opcode 11, Power Phase 2).
 #ifdef XUNA_NET
-    uint8_t b[8]={1,8,0xbf,0x7f,0xff,3,0x60,0x09};caps->setValue(b,sizeof(b));
+    uint8_t b[8]={1,8,0xbf,0xff,0xff,3,0x60,0x09};caps->setValue(b,sizeof(b));
 #else
-    uint8_t b[8]={1,8,0xbf,0x3f,0xff,3,0x60,0x09};caps->setValue(b,sizeof(b));
+    uint8_t b[8]={1,8,0xbf,0xbf,0xff,3,0x60,0x09};caps->setValue(b,sizeof(b));
 #endif
     auto* command=service->createCharacteristic("7a6e0003-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_WRITE);command->setCallbacks(&writeCallbacks_);
     status_=service->createCharacteristic("7a6e0004-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ|BLECharacteristic::PROPERTY_NOTIFY);status_->addDescriptor(new BLE2902());
@@ -215,7 +216,10 @@ class BleManager {
     traffic_=false;
     const auto session=session_.load();
     const bool sessionChanged=session!=seenSession_;
-    if(sessionChanged){adapter.onSession();proof_.reset();publishProof(signer);seenSession_=session;}
+    if(sessionChanged){
+      adapter.onSession();proof_.reset();publishProof(signer);seenSession_=session;
+      if(connected_)traffic_=true;
+    }
     if(connected_)advertising_=false;
     else if(!advertising_){BLEDevice::startAdvertising();advertising_=true;}
     Packet p;bool interacted=false,reply=false;
@@ -238,6 +242,8 @@ class BleManager {
         Serial.printf("personality_control arg=%u result=%u\n",unsigned(p.bytes[6]),result);
       if(p.size>=7&&p.bytes[1]==10)
         Serial.printf("knowledge arg=%u slot=%u result=%u\n",unsigned(p.bytes[6]),unsigned(p.bytes[8]),result);
+      if(p.size>=8&&p.bytes[1]==11)
+        Serial.printf("display_cmd bright=%u sleep=%u result=%u\n",unsigned(p.bytes[6]),unsigned(p.bytes[7]),result);
       if(p.size>=2&&p.bytes[1]==5){
         const auto quality=adapter.clock().quality(adapter.monoNow());
         const auto part=adapter.clock().dayPart(adapter.monoNow());

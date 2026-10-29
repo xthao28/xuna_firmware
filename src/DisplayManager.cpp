@@ -1,235 +1,394 @@
-#include "BoardConfig.h"
 #include "DisplayManager.h"
+#include "BoardConfig.h"
 #include "assets/XunaAnimatedScene.h"
-#include "assets/XunaUiFont.h"
 #include "assets/XunaTrackA.h"
+#include "assets/XunaUiFont.h"
 #include <esp_heap_caps.h>
 #include <qrcodegen.h>
 static_assert(USER_SETUP_ID == 206, "Use the standard T-Display-S3 LCD setup");
 static_assert(TFT_WIDTH == 170 && TFT_HEIGHT == 320, "Unexpected LCD geometry");
-static_assert(TFT_CS == 6 && TFT_DC == 7 && TFT_RST == 5 && TFT_WR == 8 && TFT_RD == 9,
+static_assert(TFT_CS == 6 && TFT_DC == 7 && TFT_RST == 5 && TFT_WR == 8 &&
+                  TFT_RD == 9,
               "Unexpected LCD control pins");
 static_assert(TFT_D0 == 39 && TFT_D1 == 40 && TFT_D2 == 41 && TFT_D3 == 42 &&
-              TFT_D4 == 45 && TFT_D5 == 46 && TFT_D6 == 47 && TFT_D7 == 48,
+                  TFT_D4 == 45 && TFT_D5 == 46 && TFT_D6 == 47 && TFT_D7 == 48,
               "Unexpected LCD data pins");
-static_assert(TFT_RGB_ORDER == TFT_RGB, "Asset requires the existing RGB panel configuration");
-static_assert(xuna::kRotation == 1, "Animated landscape asset expects rotation 1");
+static_assert(TFT_RGB_ORDER == TFT_RGB,
+              "Asset requires the existing RGB panel configuration");
+static_assert(xuna::kRotation == 1,
+              "Animated landscape asset expects rotation 1");
 static_assert(xuna::scene::kWidth == 320 && xuna::scene::kHeight == 170,
               "Regenerate the scene for the configured LCD orientation");
-// Window/effect regions push on their own, so they must never overlap the pet canvas.
-static_assert(xuna::scene::kWindowX + xuna::scene::kWindowW <= xuna::scene::kAnchorX,
+// Window/effect regions push on their own, so they must never overlap the pet
+// canvas.
+static_assert(xuna::scene::kWindowX + xuna::scene::kWindowW <=
+                  xuna::scene::kAnchorX,
               "Window must stay left of the pet canvas");
-static_assert(xuna::scene::kEffectY + xuna::scene::kEffectH <= xuna::scene::kAnchorY &&
-              xuna::scene::kEffectX >= xuna::scene::kWindowX + xuna::scene::kWindowW,
+static_assert(xuna::scene::kEffectY + xuna::scene::kEffectH <=
+                      xuna::scene::kAnchorY &&
+                  xuna::scene::kEffectX >=
+                      xuna::scene::kWindowX + xuna::scene::kWindowW,
               "Effect region must stay above the pet and clear of the window");
-static_assert(xuna::scene::kEffectH - xuna::scene::kEffectSpriteH >= xuna::ReactionEffect::kMaxRise &&
-              xuna::scene::kEffectW >= xuna::scene::kEffectSpriteW,
+static_assert(xuna::scene::kEffectH - xuna::scene::kEffectSpriteH >=
+                      xuna::ReactionEffect::kMaxRise &&
+                  xuna::scene::kEffectW >= xuna::scene::kEffectSpriteW,
               "Effect sprite must fit its region at full rise");
 static_assert(xuna::scene::kWindowCount == 4 && xuna::scene::kEffectCount == 3,
               "Asset order must match Backdrop and EffectKind");
 static_assert(xuna::scene::kFrameCount == xuna::VariantPlayer::kBaseFrames &&
-              xuna::scene::kVariantCount == xuna::kVisualVariantCount &&
-              xuna::scene::kVariantFrames == xuna::VariantPlayer::kFramesPerVariant,
+                  xuna::scene::kVariantCount == xuna::kVisualVariantCount &&
+                  xuna::scene::kVariantFrames ==
+                      xuna::VariantPlayer::kFramesPerVariant,
               "Track A asset must match VariantPlayer and VisualVariant");
-static_assert(xuna::scene::kGlassW <= 255 && xuna::scene::kGlassH <= 255, "Glass fits WindowWeather");
+static_assert(xuna::scene::kGlassW <= 255 && xuna::scene::kGlassH <= 255,
+              "Glass fits WindowWeather");
 namespace {
 // Speech bubble region: right of the window, above the pet canvas. It covers
 // the effect region, so effects pause while it shows. The tail points at the
 // middle of the pet canvas.
-constexpr int kSpeechX=90,kSpeechY=2,kSpeechW=228,kSpeechH=69;
-constexpr int kSpeechTailX=xuna::scene::kAnchorX+xuna::scene::kSpriteWidth/2-kSpeechX;
-constexpr uint16_t kSpeechTextW=kSpeechW-2*xuna::bubble::kPadX;
-}
+constexpr int kSpeechX = 90, kSpeechY = 2, kSpeechW = 228, kSpeechH = 69;
+constexpr int kSpeechTailX =
+    xuna::scene::kAnchorX + xuna::scene::kSpriteWidth / 2 - kSpeechX;
+constexpr uint16_t kSpeechTextW = kSpeechW - 2 * xuna::bubble::kPadX;
+} // namespace
 static_assert(kSpeechX >= xuna::scene::kWindowX + xuna::scene::kWindowW &&
-              kSpeechY + kSpeechH <= xuna::scene::kAnchorY && kSpeechX + kSpeechW <= xuna::scene::kWidth,
+                  kSpeechY + kSpeechH <= xuna::scene::kAnchorY &&
+                  kSpeechX + kSpeechW <= xuna::scene::kWidth,
               "Speech bubble must stay clear of the window and the pet canvas");
-static_assert(xuna::bubble::kPadTop + xuna::SpeechBubble::kLinesPerPage * 18 + xuna::bubble::kPadBottom +
-              xuna::bubble::kTail <= kSpeechH, "Three lines of the 14 px font must fit the bubble");
+static_assert(xuna::bubble::kPadTop + xuna::SpeechBubble::kLinesPerPage * 18 +
+                      xuna::bubble::kPadBottom + xuna::bubble::kTail <=
+                  kSpeechH,
+              "Three lines of the 14 px font must fit the bubble");
 namespace xuna {
 bool DisplayManager::begin() {
-  pinMode(kPowerPin, OUTPUT); digitalWrite(kPowerPin, HIGH);
-  pinMode(kBacklightPin, OUTPUT); digitalWrite(kBacklightPin, LOW);
-  lcd_.init();lcd_.setRotation(kRotation);
-  if(lcd_.width()!=scene::kWidth||lcd_.height()!=scene::kHeight)return false;
+  pinMode(kPowerPin, OUTPUT);
+  digitalWrite(kPowerPin, HIGH);
+  pinMode(kBacklightPin, OUTPUT);
+  digitalWrite(kBacklightPin, LOW);
+  lcd_.init();
+  lcd_.setRotation(kRotation);
+  if (lcd_.width() != scene::kWidth || lcd_.height() != scene::kHeight)
+    return false;
   lcd_.setSwapBytes(true);
-  lcd_.pushImage(0,0,scene::kWidth,scene::kHeight,scene::kBackground);
-  region_=static_cast<uint16_t*>(malloc(scene::kSpriteWidth*scene::kSpriteHeight*2));
-  window_=static_cast<uint16_t*>(malloc(scene::kWindowW*scene::kWindowH*2));
-  effect_buf_=static_cast<uint16_t*>(malloc(scene::kEffectW*scene::kEffectH*2));
-  if(!region_||!window_||!effect_buf_){digitalWrite(kBacklightPin,HIGH);return false;}
-  random_=Pcg32(esp_random(),54);const uint32_t now=millis();visual_.begin(now,random_);
-  weather_.begin(scene::kGlassW,scene::kGlassH,now,random_);
+  lcd_.pushImage(0, 0, scene::kWidth, scene::kHeight, scene::kBackground);
+  region_ = static_cast<uint16_t *>(
+      malloc(scene::kSpriteWidth * scene::kSpriteHeight * 2));
+  window_ =
+      static_cast<uint16_t *>(malloc(scene::kWindowW * scene::kWindowH * 2));
+  effect_buf_ =
+      static_cast<uint16_t *>(malloc(scene::kEffectW * scene::kEffectH * 2));
+  if (!region_ || !window_ || !effect_buf_) {
+    digitalWrite(kBacklightPin, HIGH);
+    return false;
+  }
+  random_ = Pcg32(esp_random(), 54);
+  const uint32_t now = millis();
+  visual_.begin(now, random_);
+  weather_.begin(scene::kGlassW, scene::kGlassH, now, random_);
   // AW9364 powers up at 16/16 after >= 25 us HIGH; turn it on before stepping
   // so backlightHw_ and the hardware register stay in lockstep.
-  digitalWrite(kBacklightPin,HIGH);delayMicroseconds(35);
-  backlightHw_=BacklightDimmer::kMax;
-  update(now,PetState::Idle);
-  Serial.printf("scene=animated region_bytes=%u window_bytes=%u effect_bytes=%u flash_pixels=%u\n",
-                scene::kSpriteWidth*scene::kSpriteHeight*2,scene::kWindowW*scene::kWindowH*2,
-                scene::kEffectW*scene::kEffectH*2,
-                unsigned(sizeof(scene::kBackground)+sizeof(scene::kFrames)+sizeof(scene::kWindows)+sizeof(scene::kEffects)));
+  digitalWrite(kBacklightPin, HIGH);
+  delayMicroseconds(35);
+  backlightHw_ = BacklightDimmer::kMax;
+  screenSleeping_ = false;
+  powerState_ = ScreenPowerState::Active;
+  update(now, PetState::Idle);
+  Serial.printf("scene=animated region_bytes=%u window_bytes=%u "
+                "effect_bytes=%u flash_pixels=%u\n",
+                scene::kSpriteWidth * scene::kSpriteHeight * 2,
+                scene::kWindowW * scene::kWindowH * 2,
+                scene::kEffectW * scene::kEffectH * 2,
+                unsigned(sizeof(scene::kBackground) + sizeof(scene::kFrames) +
+                         sizeof(scene::kWindows) + sizeof(scene::kEffects)));
   return true;
 }
 // The AW9364 1-wire LED driver steps down one level per short low pulse
 // (0.5..500 us) and wraps from 1 to 16; a low longer than 2.5 ms switches it
 // off. Guard the pulse train against BLE/RTOS interrupts so a preempted LOW
 // never shuts the driver down or drifts out of sync.
-void DisplayManager::setBacklight(uint8_t level){
-  if(level<1||level>BacklightDimmer::kMax||level==backlightHw_)return;
-  const unsigned pulses=(BacklightDimmer::kMax+backlightHw_-level)%BacklightDimmer::kMax;
+void DisplayManager::setBacklight(uint8_t level) {
+  if (screenSleeping_ || level < 1 || level > BacklightDimmer::kMax ||
+      level == backlightHw_)
+    return;
+  const unsigned pulses =
+      (BacklightDimmer::kMax + backlightHw_ - level) % BacklightDimmer::kMax;
   noInterrupts();
-  for(unsigned i=0;i<pulses;++i){
-    digitalWrite(kBacklightPin,LOW);delayMicroseconds(3);
-    digitalWrite(kBacklightPin,HIGH);delayMicroseconds(3);
+  for (unsigned i = 0; i < pulses; ++i) {
+    digitalWrite(kBacklightPin, LOW);
+    delayMicroseconds(3);
+    digitalWrite(kBacklightPin, HIGH);
+    delayMicroseconds(3);
   }
   interrupts();
-  backlightHw_=level;
+  backlightHw_ = level;
 }
-void DisplayManager::update(uint32_t now,PetState state){
-  if(!region_)return;
-  const int speechPage=speech_.page(now);
-  setBacklight(backlight_.update(now,state,cardOpen()||speechPage>=0));
-  if(cardOpen()){
-    if(uint32_t(now-cardAt_)>=cardUntil_)closeCard();
+void DisplayManager::setScreenPower(ScreenPowerState power, uint32_t now,
+                                    PetState state) {
+  powerState_ = power;
+  if (power == ScreenPowerState::Off) {
+    if (!screenSleeping_) {
+      digitalWrite(kBacklightPin, LOW);
+      lcd_.writecommand(0x10); // ST7789_SLPIN
+      backlightHw_ = 0;
+      screenSleeping_ = true;
+    }
+    return;
+  }
+  if (screenSleeping_) {
+    lcd_.writecommand(0x11); // ST7789_SLPOUT
+    delay(5);
+    digitalWrite(kBacklightPin, HIGH);
+    delayMicroseconds(35);
+    backlightHw_ = BacklightDimmer::kMax;
+    screenSleeping_ = false;
+    windowValid_ = false;
+    lastFrame_ = 255;
+    effectValid_ = false;
+    const bool overlay = cardOpen() || speech_.page(now) >= 0;
+    const uint8_t tgt =
+        backlight_.target(state, overlay, power == ScreenPowerState::Dim);
+    setBacklight(tgt);
+    backlight_.syncHardware(backlightHw_);
+  }
+}
+void DisplayManager::update(uint32_t now, PetState state) {
+  if (!region_ || screenSleeping_)
+    return;
+  const int speechPage = speech_.page(now);
+  const bool dimmed = powerState_ == ScreenPowerState::Dim;
+  setBacklight(
+      backlight_.update(now, state, cardOpen() || speechPage >= 0, dimmed));
+  if (cardOpen()) {
+    if (uint32_t(now - cardAt_) >= cardUntil_)
+      closeCard();
     return; // nothing else draws over a card
   }
-  const uint8_t base=visual_.frame(now,state,random_);  // keeps the base timing either way
-  const int variantFrame=variant_.frame(now,state,visual_.interval());
-  const uint8_t frame=variantFrame>=0?uint8_t(variantFrame):base;
-  const bool frameChanged=frame!=lastFrame_;
-  const bool quiet=visual_.interval()>=PowerPacer::kQuietFrameScale*80;
-  // Window and effect regions never overlap the pet canvas, so each pushes alone.
-  const uint32_t sceneStart=micros();bool sceneDrawn=false;
-  bool windowDirty=!windowValid_||backdrop_!=drawnBackdrop_;
-  if(backdrop_==Backdrop::Rain&&(!quiet||frameChanged)&&weather_.stepRain(now,random_))windowDirty=true;
-  if(backdrop_==Backdrop::Night&&weather_.stepStars(now,scene::kStarCount,random_))windowDirty=true;
-  if(windowDirty){drawWindow();sceneDrawn=true;}
-  if(speechPage!=drawnSpeechPage_){drawSpeech(speechPage);sceneDrawn=true;}
-  const EffectSample sample=effect_.sample(now);
-  if(drawnSpeechPage_<0&&(!effectValid_||sample!=drawnEffect_)){drawEffect(sample);sceneDrawn=true;}
-  if(sceneDrawn){const uint32_t elapsed=micros()-sceneStart;if(elapsed>maxSceneUs_)maxSceneUs_=elapsed;}
-  if(!frameChanged)return;
-  const uint32_t start=micros();
-  const uint16_t* pixels=frame>=VariantPlayer::kBaseFrames
-      ?scene::kVariantSprites+(frame-VariantPlayer::kBaseFrames)*scene::kSpriteWidth*scene::kSpriteHeight
-      :scene::kFrames+frame*scene::kSpriteWidth*scene::kSpriteHeight;
-  // Every frame uses the same full canvas: union of previous/current bounding boxes.
-  // Restore/composite offscreen, then push one opaque region (no erase-then-draw flicker).
-  for(unsigned y=0;y<scene::kSpriteHeight;++y){
-    const uint16_t* src=pixels+y*scene::kSpriteWidth;
-    const uint16_t* bg=scene::kBackground+(scene::kAnchorY+y)*scene::kWidth+scene::kAnchorX;
-    uint16_t* dst=region_+y*scene::kSpriteWidth;
-    for(unsigned x=0;x<scene::kSpriteWidth;++x){
-      const uint16_t color=src[x];
-      dst[x]=color==scene::kTransparent?bg[x]:color;
+  const uint8_t base =
+      visual_.frame(now, state, random_); // keeps the base timing either way
+  const int variantFrame = variant_.frame(now, state, visual_.interval());
+  const uint8_t frame = variantFrame >= 0 ? uint8_t(variantFrame) : base;
+  const bool frameChanged = frame != lastFrame_;
+  const bool quiet = visual_.interval() >= PowerPacer::kQuietFrameScale * 80;
+  // Window and effect regions never overlap the pet canvas, so each pushes
+  // alone.
+  const uint32_t sceneStart = micros();
+  bool sceneDrawn = false;
+  bool windowDirty = !windowValid_ || backdrop_ != drawnBackdrop_;
+  if (backdrop_ == Backdrop::Rain && (!quiet || frameChanged) &&
+      weather_.stepRain(now, random_))
+    windowDirty = true;
+  if (backdrop_ == Backdrop::Night &&
+      weather_.stepStars(now, scene::kStarCount, random_))
+    windowDirty = true;
+  if (windowDirty) {
+    drawWindow();
+    sceneDrawn = true;
+  }
+  if (speechPage != drawnSpeechPage_) {
+    drawSpeech(speechPage);
+    sceneDrawn = true;
+  }
+  const EffectSample sample = effect_.sample(now);
+  if (drawnSpeechPage_ < 0 && (!effectValid_ || sample != drawnEffect_)) {
+    drawEffect(sample);
+    sceneDrawn = true;
+  }
+  if (sceneDrawn) {
+    const uint32_t elapsed = micros() - sceneStart;
+    if (elapsed > maxSceneUs_)
+      maxSceneUs_ = elapsed;
+  }
+  if (!frameChanged)
+    return;
+  const uint32_t start = micros();
+  const uint16_t *pixels =
+      frame >= VariantPlayer::kBaseFrames
+          ? scene::kVariantSprites + (frame - VariantPlayer::kBaseFrames) *
+                                         scene::kSpriteWidth *
+                                         scene::kSpriteHeight
+          : scene::kFrames + frame * scene::kSpriteWidth * scene::kSpriteHeight;
+  // Every frame uses the same full canvas: union of previous/current bounding
+  // boxes. Restore/composite offscreen, then push one opaque region (no
+  // erase-then-draw flicker).
+  for (unsigned y = 0; y < scene::kSpriteHeight; ++y) {
+    const uint16_t *src = pixels + y * scene::kSpriteWidth;
+    const uint16_t *bg = scene::kBackground +
+                         (scene::kAnchorY + y) * scene::kWidth +
+                         scene::kAnchorX;
+    uint16_t *dst = region_ + y * scene::kSpriteWidth;
+    for (unsigned x = 0; x < scene::kSpriteWidth; ++x) {
+      const uint16_t color = src[x];
+      dst[x] = color == scene::kTransparent ? bg[x] : color;
     }
   }
-  lcd_.pushImage(scene::kAnchorX,scene::kAnchorY,scene::kSpriteWidth,scene::kSpriteHeight,region_);
-  lastFrame_=frame;++draws_;const uint32_t elapsed=micros()-start;if(elapsed>maxDrawUs_)maxDrawUs_=elapsed;
+  lcd_.pushImage(scene::kAnchorX, scene::kAnchorY, scene::kSpriteWidth,
+                 scene::kSpriteHeight, region_);
+  lastFrame_ = frame;
+  ++draws_;
+  const uint32_t elapsed = micros() - start;
+  if (elapsed > maxDrawUs_)
+    maxDrawUs_ = elapsed;
 }
-void DisplayManager::drawWindow(){
-  const uint16_t* src=scene::kWindows+unsigned(backdrop_)*scene::kWindowW*scene::kWindowH;
-  for(unsigned i=0;i<unsigned(scene::kWindowW)*scene::kWindowH;++i)window_[i]=src[i];
-  auto put=[this](int x,int y,uint16_t color){ // screen coordinates, glass only
-    if(x<scene::kGlassX||y<scene::kGlassY||x>=scene::kGlassX+scene::kGlassW||y>=scene::kGlassY+scene::kGlassH)return;
-    if(x>=scene::kMullionX0&&x<=scene::kMullionX1)return;
-    window_[(y-scene::kWindowY)*scene::kWindowW+(x-scene::kWindowX)]=color;
+void DisplayManager::drawWindow() {
+  const uint16_t *src =
+      scene::kWindows + unsigned(backdrop_) * scene::kWindowW * scene::kWindowH;
+  for (unsigned i = 0; i < unsigned(scene::kWindowW) * scene::kWindowH; ++i)
+    window_[i] = src[i];
+  auto put = [this](int x, int y,
+                    uint16_t color) { // screen coordinates, glass only
+    if (x < scene::kGlassX || y < scene::kGlassY ||
+        x >= scene::kGlassX + scene::kGlassW ||
+        y >= scene::kGlassY + scene::kGlassH)
+      return;
+    if (x >= scene::kMullionX0 && x <= scene::kMullionX1)
+      return;
+    window_[(y - scene::kWindowY) * scene::kWindowW + (x - scene::kWindowX)] =
+        color;
   };
-  if(backdrop_==Backdrop::Rain){
-    const RainDrop* drops=weather_.drops();
-    for(uint8_t i=0;i<WindowWeather::kDrops;++i)for(int k=0;k<3;++k)
-      put(scene::kGlassX+drops[i].x+k,scene::kGlassY+drops[i].y-2*k,scene::kRainColor); // slanted streak
-  }
-  if(backdrop_==Backdrop::Night){
-    for(uint8_t i=0;i<scene::kStarCount;++i){
-      const bool bright=i>=8||(weather_.stars()&(1u<<i));
-      put(pgm_read_byte(scene::kStarX+i),pgm_read_byte(scene::kStarY+i),bright?scene::kStarBright:scene::kStarDim);
+  if (backdrop_ == Backdrop::Rain) {
+    const RainDrop *drops = weather_.drops();
+    for (uint8_t i = 0; i < WindowWeather::kDrops; ++i)
+      for (int k = 0; k < 3; ++k)
+        put(scene::kGlassX + drops[i].x + k,
+            scene::kGlassY + drops[i].y - 2 * k,
+            scene::kRainColor); // slanted streak
+  };
+  if (backdrop_ == Backdrop::Night) {
+    for (uint8_t i = 0; i < scene::kStarCount; ++i) {
+      const bool bright = i >= 8 || (weather_.stars() & (1u << i));
+      put(pgm_read_byte(scene::kStarX + i), pgm_read_byte(scene::kStarY + i),
+          bright ? scene::kStarBright : scene::kStarDim);
     }
   }
-  lcd_.pushImage(scene::kWindowX,scene::kWindowY,scene::kWindowW,scene::kWindowH,window_);
-  drawnBackdrop_=backdrop_;windowValid_=true;
+  lcd_.pushImage(scene::kWindowX, scene::kWindowY, scene::kWindowW,
+                 scene::kWindowH, window_);
+  drawnBackdrop_ = backdrop_;
+  windowValid_ = true;
 }
-void DisplayManager::drawEffect(const EffectSample& sample){
-  for(unsigned y=0;y<scene::kEffectH;++y){
-    const uint16_t* bg=scene::kBackground+(scene::kEffectY+y)*scene::kWidth+scene::kEffectX;
-    uint16_t* dst=effect_buf_+y*scene::kEffectW;
-    for(unsigned x=0;x<scene::kEffectW;++x)dst[x]=bg[x];
+void DisplayManager::drawEffect(const EffectSample &sample) {
+  for (unsigned y = 0; y < scene::kEffectH; ++y) {
+    const uint16_t *bg = scene::kBackground +
+                         (scene::kEffectY + y) * scene::kWidth +
+                         scene::kEffectX;
+    uint16_t *dst = effect_buf_ + y * scene::kEffectW;
+    for (unsigned x = 0; x < scene::kEffectW; ++x)
+      dst[x] = bg[x];
   }
-  if(sample.kind!=EffectKind::None&&sample.visible){
-    const uint16_t* sprite=scene::kEffects+(unsigned(sample.kind)-1)*scene::kEffectSpriteW*scene::kEffectSpriteH;
-    const unsigned ox=(scene::kEffectW-scene::kEffectSpriteW)/2,oy=scene::kEffectH-scene::kEffectSpriteH-sample.rise;
-    for(unsigned y=0;y<scene::kEffectSpriteH;++y){
-      const uint16_t* src=sprite+y*scene::kEffectSpriteW;
-      uint16_t* dst=effect_buf_+(oy+y)*scene::kEffectW+ox;
-      for(unsigned x=0;x<scene::kEffectSpriteW;++x){
-        const uint16_t color=src[x];
-        if(color!=scene::kTransparent)dst[x]=color;
+  if (sample.kind != EffectKind::None && sample.visible) {
+    const uint16_t *sprite = scene::kEffects + (unsigned(sample.kind) - 1) *
+                                                   scene::kEffectSpriteW *
+                                                   scene::kEffectSpriteH;
+    const unsigned ox = (scene::kEffectW - scene::kEffectSpriteW) / 2,
+                   oy = scene::kEffectH - scene::kEffectSpriteH - sample.rise;
+    for (unsigned y = 0; y < scene::kEffectSpriteH; ++y) {
+      const uint16_t *src = sprite + y * scene::kEffectSpriteW;
+      uint16_t *dst = effect_buf_ + (oy + y) * scene::kEffectW + ox;
+      for (unsigned x = 0; x < scene::kEffectSpriteW; ++x) {
+        const uint16_t color = src[x];
+        if (color != scene::kTransparent)
+          dst[x] = color;
       }
     }
   }
-  lcd_.pushImage(scene::kEffectX,scene::kEffectY,scene::kEffectW,scene::kEffectH,effect_buf_);
-  drawnEffect_=sample;effectValid_=true;
+  lcd_.pushImage(scene::kEffectX, scene::kEffectY, scene::kEffectW,
+                 scene::kEffectH, effect_buf_);
+  drawnEffect_ = sample;
+  effectValid_ = true;
 }
-bool DisplayManager::showSpeech(const char* text,uint32_t now){
-  if(!region_)return false;
-  if(!speechBuf_)speechBuf_=static_cast<uint16_t*>(heap_caps_malloc(kSpeechW*kSpeechH*2,MALLOC_CAP_SPIRAM));
-  if(!speechBuf_)return false;
-  speech_.show(text,ui::kFontValue,kSpeechTextW,now);
-  drawnSpeechPage_=-2; // redraw even when the page number is unchanged
+bool DisplayManager::showSpeech(const char *text, uint32_t now) {
+  if (!region_)
+    return false;
+  if (!speechBuf_)
+    speechBuf_ = static_cast<uint16_t *>(
+        heap_caps_malloc(kSpeechW * kSpeechH * 2, MALLOC_CAP_SPIRAM));
+  if (!speechBuf_)
+    return false;
+  speech_.show(text, ui::kFontValue, kSpeechTextW, now);
+  drawnSpeechPage_ = -2; // redraw even when the page number is unchanged
   return true;
 }
 // Page -1 restores the scene behind the bubble and lets the effect draw again.
-void DisplayManager::drawSpeech(int page){
-  if(page>=0&&drawnSpeechPage_<0)drawEffect(EffectSample{EffectKind::None,0,false}); // clear rows below the bubble
-  if(speechBuf_){
-    for(int y=0;y<kSpeechH;++y){
-      const uint16_t* bg=scene::kBackground+(kSpeechY+y)*scene::kWidth+kSpeechX;
-      uint16_t* dst=speechBuf_+y*kSpeechW;
-      for(int x=0;x<kSpeechW;++x)dst[x]=bg[x];
+void DisplayManager::drawSpeech(int page) {
+  if (page >= 0 && drawnSpeechPage_ < 0)
+    drawEffect(EffectSample{EffectKind::None, 0,
+                            false}); // clear rows below the bubble
+  if (speechBuf_) {
+    for (int y = 0; y < kSpeechH; ++y) {
+      const uint16_t *bg =
+          scene::kBackground + (kSpeechY + y) * scene::kWidth + kSpeechX;
+      uint16_t *dst = speechBuf_ + y * kSpeechW;
+      for (int x = 0; x < kSpeechW; ++x)
+        dst[x] = bg[x];
     }
-    if(page>=0){Canvas canvas{speechBuf_,uint16_t(kSpeechW),uint16_t(kSpeechH)};renderSpeechBubble(canvas,ui::kFontValue,speech_,page,kSpeechTailX);}
-    lcd_.pushImage(kSpeechX,kSpeechY,kSpeechW,kSpeechH,speechBuf_);
+    if (page >= 0) {
+      Canvas canvas{speechBuf_, uint16_t(kSpeechW), uint16_t(kSpeechH)};
+      renderSpeechBubble(canvas, ui::kFontValue, speech_, page, kSpeechTailX);
+    }
+    lcd_.pushImage(kSpeechX, kSpeechY, kSpeechW, kSpeechH, speechBuf_);
   }
-  if(page<0)effectValid_=false;
-  drawnSpeechPage_=page;
+  if (page < 0)
+    effectValid_ = false;
+  drawnSpeechPage_ = page;
 }
 namespace {
-const CardFonts kCardFonts{ui::kFontTitle,ui::kFontValue,ui::kFontLabel};
-bool qrDark(const void* ctx,int x,int y){return qrcodegen_getModule(static_cast<const uint8_t*>(ctx),x,y);}
+const CardFonts kCardFonts{ui::kFontTitle, ui::kFontValue, ui::kFontLabel};
+bool qrDark(const void *ctx, int x, int y) {
+  return qrcodegen_getModule(static_cast<const uint8_t *>(ctx), x, y);
 }
-bool DisplayManager::ensureCardBuffers(){
-  if(!card_)card_=static_cast<uint16_t*>(heap_caps_malloc(scene::kWidth*scene::kHeight*2,MALLOC_CAP_SPIRAM));
-  if(!qr_)qr_=static_cast<uint8_t*>(heap_caps_malloc(2*qrcodegen_BUFFER_LEN_MAX,MALLOC_CAP_SPIRAM));
-  return card_&&qr_;
+} // namespace
+bool DisplayManager::ensureCardBuffers() {
+  if (!card_)
+    card_ = static_cast<uint16_t *>(heap_caps_malloc(
+        scene::kWidth * scene::kHeight * 2, MALLOC_CAP_SPIRAM));
+  if (!qr_)
+    qr_ = static_cast<uint8_t *>(
+        heap_caps_malloc(2 * qrcodegen_BUFFER_LEN_MAX, MALLOC_CAP_SPIRAM));
+  return card_ && qr_;
 }
-void DisplayManager::openCard(uint32_t now,uint32_t durationMs){
-  const uint32_t start=micros();
-  lcd_.pushImage(0,0,scene::kWidth,scene::kHeight,card_);
-  const uint32_t elapsed=micros()-start;if(elapsed>maxSceneUs_)maxSceneUs_=elapsed;
-  cardAt_=now;cardUntil_=durationMs;
+void DisplayManager::openCard(uint32_t now, uint32_t durationMs) {
+  if (screenSleeping_)
+    wake(now, PetState::Idle);
+  const uint32_t start = micros();
+  lcd_.pushImage(0, 0, scene::kWidth, scene::kHeight, card_);
+  const uint32_t elapsed = micros() - start;
+  if (elapsed > maxSceneUs_)
+    maxSceneUs_ = elapsed;
+  cardAt_ = now;
+  cardUntil_ = durationMs;
 }
-bool DisplayManager::showStatus(const StatusCardModel& model,uint32_t now){
-  if(!region_||!ensureCardBuffers())return false;
-  Canvas canvas{card_,scene::kWidth,scene::kHeight};
-  renderStatusCard(canvas,kCardFonts,model);
-  openCard(now,8000);
+bool DisplayManager::showStatus(const StatusCardModel &model, uint32_t now) {
+  if (!region_ || !ensureCardBuffers())
+    return false;
+  Canvas canvas{card_, scene::kWidth, scene::kHeight};
+  renderStatusCard(canvas, kCardFonts, model);
+  openCard(now, 8000);
   return true;
 }
-bool DisplayManager::showPairing(const char* uri,const char* shortId,uint32_t now){
-  if(!region_||!ensureCardBuffers())return false;
-  uint8_t* symbol=qr_;uint8_t* scratch=qr_+qrcodegen_BUFFER_LEN_MAX;
-  if(!qrcodegen_encodeText(uri,scratch,symbol,qrcodegen_Ecc_MEDIUM,1,10,qrcodegen_Mask_AUTO,true))return false;
-  Canvas canvas{card_,scene::kWidth,scene::kHeight};
-  renderPairingCard(canvas,kCardFonts,shortId,qrcodegen_getSize(symbol),qrDark,symbol);
-  openCard(now,60000);
+bool DisplayManager::showPairing(const char *uri, const char *shortId,
+                                 uint32_t now) {
+  if (!region_ || !ensureCardBuffers())
+    return false;
+  uint8_t *symbol = qr_;
+  uint8_t *scratch = qr_ + qrcodegen_BUFFER_LEN_MAX;
+  if (!qrcodegen_encodeText(uri, scratch, symbol, qrcodegen_Ecc_MEDIUM, 1, 10,
+                            qrcodegen_Mask_AUTO, true))
+    return false;
+  Canvas canvas{card_, scene::kWidth, scene::kHeight};
+  renderPairingCard(canvas, kCardFonts, shortId, qrcodegen_getSize(symbol),
+                    qrDark, symbol);
+  openCard(now, 60000);
   return true;
 }
 // Restores the whole scene: background, current window, effect, pet.
-void DisplayManager::closeCard(){
-  if(!cardOpen())return;
-  cardUntil_=0;
-  lcd_.pushImage(0,0,scene::kWidth,scene::kHeight,scene::kBackground);
-  windowValid_=false;lastFrame_=255;effectValid_=false;drawnSpeechPage_=-1;
-  drawnEffect_=EffectSample{EffectKind::None,0,false};
+void DisplayManager::closeCard() {
+  if (!cardOpen())
+    return;
+  cardUntil_ = 0;
+  lcd_.pushImage(0, 0, scene::kWidth, scene::kHeight, scene::kBackground);
+  windowValid_ = false;
+  lastFrame_ = 255;
+  effectValid_ = false;
+  drawnSpeechPage_ = -1;
+  drawnEffect_ = EffectSample{EffectKind::None, 0, false};
 }
-}
+} // namespace xuna

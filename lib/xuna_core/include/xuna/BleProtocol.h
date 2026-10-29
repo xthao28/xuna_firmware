@@ -21,6 +21,9 @@ struct BleCommand {
 // change, 2 = reset, source 0, capability byte 3 bit 3) rides the same flag.
 // Opcode 10 KnowledgeCommand (KD-2, 16 bytes: arg 1..7 sub-op, source 0,
 // slot @8, slot2 @9, reserved u16 @10 = 0, factKey @12..15) parsed when `knowledge` is set.
+// Opcode 11 DisplaySettings (Power Phase 2, 8 bytes: arg 0..2 brightness
+// preset Low/Medium/High, source 0..1 screenSleep enabled, capability byte 3
+// bit 7) rides the `knowledge` / enhanced flag.
 inline BleCommand parseCommand(const uint8_t* b,size_t n,
                                bool statedPreference=false,
                                bool timeSync=false,bool hatch=false,
@@ -38,7 +41,8 @@ inline BleCommand parseCommand(const uint8_t* b,size_t n,
   const bool talk=conversation&&c.opcode==8;
   const bool control=conversation&&c.opcode==9;
   const bool know=knowledge&&c.opcode==10;
-  if((c.opcode<1||c.opcode>4)&&!stated&&!sync&&!hatchCommand&&!talk&&!control&&!know){c.error=3;return c;}
+  const bool displaySettings=knowledge&&c.opcode==11;
+  if((c.opcode<1||c.opcode>4)&&!stated&&!sync&&!hatchCommand&&!talk&&!control&&!know&&!displaySettings){c.error=3;return c;}
   const size_t expected=(sync||know)?16:(c.opcode==3||stated?12:8);
   if(n!=expected){c.error=2;return c;}
   if(c.opcode==3)c.target=LifeEngine::get32(b+8);
@@ -65,6 +69,7 @@ inline BleCommand parseCommand(const uint8_t* b,size_t n,
     else if((c.arg==5||c.arg==6)&&(c.slot2!=0||c.factKey==0))c.error=4;
     else if(c.arg==7&&(c.slot2>=5||c.slot2==c.slot||c.factKey==0))c.error=4;
   }
+  if(displaySettings&&(c.arg>2||c.source>1))c.error=4;
   return c;
 }
 class CommandCache {

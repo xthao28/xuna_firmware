@@ -17,12 +17,27 @@ class DisplayManager {
   // Pet sprite frame period (personality tempo, PE-2).
   void setFramePeriod(uint16_t ms,uint32_t now){visual_.setInterval(ms,now);}
   uint16_t framePeriod() const {return visual_.interval();}
-  // True while any transient visual (card, speech bubble, Track A variant,
-  // reaction effect or backlight fade) needs full 10 FPS / 10 ms pacing.
+  void setBrightnessPreset(BrightnessPreset preset){backlight_.setPreset(preset);}
+  BrightnessPreset brightnessPreset() const {return backlight_.preset();}
+  void setScreenPower(ScreenPowerState power,uint32_t now,PetState state);
+  void wake(uint32_t now,PetState state){setScreenPower(ScreenPowerState::Active,now,state);}
+  bool screenSleeping() const {return screenSleeping_;}
+  ScreenPowerState screenPower() const {return powerState_;}
+  bool overlayOpen(uint32_t now) const {
+    return cardOpen()||speech_.page(now)>=0||drawnSpeechPage_>=0;
+  }
+  // True while a card, speech bubble, Track A variant or reaction effect is
+  // active (used by PowerPacer so a backlight fade into Dim does not cancel Dim).
+  bool overlayOrActionBusy(uint32_t now) const {
+    return overlayOpen(now)||variant_.playing()!=VisualVariant::None||
+           effect_.active()||drawnEffect_.kind!=EffectKind::None;
+  }
+  // True while any transient visual or backlight fade needs 10 ms pacing.
   bool visualBusy(uint32_t now,PetState state) const {
+    if(screenSleeping_)return false;
     const bool overlay=cardOpen()||speech_.page(now)>=0;
-    return overlay||drawnSpeechPage_>=0||variant_.playing()!=VisualVariant::None||
-           effect_.active()||drawnEffect_.kind!=EffectKind::None||backlight_.fading(state,overlay);
+    const bool dimmed=powerState_==ScreenPowerState::Dim;
+    return overlayOrActionBusy(now)||backlight_.fading(state,overlay,dimmed);
   }
   // Track A variant over the current pose (LifeCore::takeVariant).
   void playVariant(VisualVariant v,uint32_t now){variant_.start(v,now);}
@@ -68,5 +83,7 @@ class DisplayManager {
   uint32_t draws_=0,maxDrawUs_=0,maxSceneUs_=0;
   BacklightDimmer backlight_;
   uint8_t backlightHw_=BacklightDimmer::kMax; // driver level after power-up
+  ScreenPowerState powerState_=ScreenPowerState::Active;
+  bool screenSleeping_=false;
 };
 }

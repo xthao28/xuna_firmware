@@ -150,9 +150,15 @@ void setup() {
   if (ESP.getFlashChipSize() != 16U * 1024U * 1024U || !psramFound() ||
       psramChipBytes != 8U * 1024U * 1024U)
     Serial.println("WARNING: memory differs from expected 16MB Flash / OPI PSRAM; verify board.");
-  displayReady = display.begin();
   sceneMode = scenePreference.load();
-  Serial.printf("scene_mode=%s\n", sceneName(sceneMode));
+  const auto savedBrightness = scenePreference.loadBrightness();
+  const bool savedScreenSleep = scenePreference.loadScreenSleep();
+  display.setBrightnessPreset(savedBrightness);
+  pacer.setSleepEnabled(savedScreenSleep);
+  displayReady = display.begin();
+  Serial.printf("scene_mode=%s brightness=%u screen_sleep=%u\n",
+                sceneName(sceneMode), unsigned(static_cast<uint8_t>(savedBrightness)),
+                savedScreenSleep ? 1u : 0u);
   Serial.println(displayReady ? "Display driver initialized; confirm LCD visually." :
                                 "ERROR: display dimensions/buffer allocation failed; input/logging continue.");
   const uint32_t now = millis();
@@ -226,7 +232,24 @@ void loop() {
       identity.state()==xuna::IdentityState::Ready ? &identity.record() : nullptr;
   if (bleReady) {
     if (ble.update(adapter,readyIdentity,deviceKey,now,displayReady&&lifeReady))localBehavior.activity(now);
-    if (ble.hadTraffic())pacer.touch(now);
+    if (ble.hadTraffic()){
+      pacer.touch(now);
+      if(displayReady&&display.screenSleeping())display.wake(now,animation.state());
+    }
+  }
+  {
+    uint8_t bright=0;bool sleepOn=true;
+    if(adapter.takeDisplaySettings(bright,sleepOn)){
+      const auto preset=xuna::brightnessPresetFrom(bright);
+      display.setBrightnessPreset(preset);
+      pacer.setSleepEnabled(sleepOn);
+      const bool savedB=scenePreference.saveBrightness(preset);
+      const bool savedS=scenePreference.saveScreenSleep(sleepOn);
+      pacer.touch(now);
+      if(displayReady)display.wake(now,animation.state());
+      Serial.printf("display_settings brightness=%u screen_sleep=%u saved=%u\n",
+                    unsigned(static_cast<uint8_t>(preset)),sleepOn?1u:0u,(savedB&&savedS)?1u:0u);
+    }
   }
 #ifdef XUNA_NET
   if (bleReady && netReady) {
@@ -249,16 +272,25 @@ void loop() {
   if (bleReady && displayReady) {
     const char* said=nullptr;
     switch (ble.takeSpeech(said)) {
-      case 1: display.showSpeech(said, now); pacer.touch(now); break;
+      case 1:
+        if(display.screenSleeping())display.wake(now,animation.state());
+        display.showSpeech(said, now);
+        pacer.touch(now);
+        break;
       case 2: display.clearSpeech(); pacer.touch(now); break;
       default: break;
     }
   }
   const auto events = input.update(now);
-  // While a card is shown, any button only closes it.
+  // While the screen is asleep or a card is shown, a single button press only wakes/closes it.
   const bool anyButton=events.happy||events.idle||events.happyHold||events.idleHold||events.bothHold;
   bool consumed=false;
-  if(displayReady&&display.cardOpen()&&anyButton&&!events.bothHold){
+  if(displayReady&&display.screenSleeping()&&anyButton){
+    display.wake(now,animation.state());localBehavior.activity(now);pacer.touch(now);
+    consumed=!events.bothHold;
+    Serial.println("button: screen woke");
+  }
+  if(displayReady&&!consumed&&display.cardOpen()&&anyButton&&!events.bothHold){
     display.closeCard();consumed=true;localBehavior.activity(now);pacer.touch(now);
     Serial.println("button: card closed");
   }
@@ -299,10 +331,11 @@ void loop() {
     if(anyButton){localBehavior.activity(now);pacer.touch(now);}
     uint8_t quietAction=0;
     // Idle for a while (51–69 s, by temperament): XUNA picks what to do itself; the owner may react.
-    if(localBehavior.choosePreferred(now,adapter.last().activity==xuna::Activity::Idle,
-                                    static_cast<uint8_t>(adapter.preferred(0)),quietAction,
-                                    xuna::Expression::spontaneousWaitMs(core.personality())))
-      if(adapter.localSpontaneous(now))pacer.touch(now);
+    if((!displayReady||!display.screenSleeping())&&
+       localBehavior.choosePreferred(now,adapter.last().activity==xuna::Activity::Idle,
+                                     static_cast<uint8_t>(adapter.preferred(0)),quietAction,
+                                     xuna::Expression::spontaneousWaitMs(core.personality())))
+      adapter.localSpontaneous(now);
   }
   syncActivityVisual(now);
   logActivityChange(now);
@@ -310,8 +343,7 @@ void loop() {
   // Track A: a variant LifeCore started (greeting, yawn, look around, bounce).
   const auto v=core.takeVariant();
   if(v!=xuna::VisualVariant::None){
-    pacer.touch(now);
-    if(displayReady)display.playVariant(v,now);
+    if(displayReady&&!display.screenSleeping())display.playVariant(v,now);
     static const char* const kVariantNames[]={"none","look_around","yawn_stretch","bounce_play","greet_nuzzle"};
     Serial.printf("variant=%s\n",kVariantNames[static_cast<uint8_t>(v)]);
   }
@@ -321,8 +353,10 @@ void loop() {
   animation.setReactionMs(style.reactionMs);
   animation.update(now);
   if(displayReady){
-    const bool busy=display.visualBusy(now,animation.state());
-    display.setFramePeriod(pacer.framePeriodMs(now,animation.state(),busy,style.framePeriodMs),now);
+    const bool overlay=display.overlayOpen(now);
+    const bool actionBusy=display.overlayOrActionBusy(now);
+    display.setScreenPower(pacer.screenState(now,animation.state(),overlay),now,animation.state());
+    display.setFramePeriod(pacer.framePeriodMs(now,animation.state(),actionBusy,style.framePeriodMs),now);
     display.setBackdrop(xuna::backdropFor(sceneMode,core.clock().dayPart(core.mono64())));
 #ifdef XUNA_E14
     const uint32_t drawsBefore=display.draws(),drawStarted=micros();
@@ -342,7 +376,8 @@ void loop() {
   const uint32_t loopPeriodMs = pacer.loopPeriodMs(
       now, animation.state(),
       displayReady && display.visualBusy(now, animation.state()),
-      input.anyRawPressed());
+      input.anyRawPressed(),
+      displayReady && display.overlayOpen(now));
   if (uint32_t(now - diagnosticsAt) >= xuna::kDiagnosticsMs) {
     Serial.printf("scene=animated state=%s loop_gap_max_us=%u draws=%u draw_max_us=%u scene_max_us=%u\n",
                   (animation.state() == xuna::PetState::Idle ? "idle" : (animation.state() == xuna::PetState::Happy ? "happy" : (animation.state() == xuna::PetState::Sleep ? "sleep" : "curious"))), maxLoopGapUs, display.draws(), display.maxDrawUs(), display.maxSceneUs());

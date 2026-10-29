@@ -12,6 +12,26 @@ void target_by_state_and_card() {
   TEST_ASSERT_EQUAL_UINT8(16, d.target(PetState::Idle, true));
 }
 
+void brightness_presets_and_dimmed_target() {
+  BacklightDimmer d;
+  d.setPreset(BrightnessPreset::Low);
+  TEST_ASSERT_EQUAL(BrightnessPreset::Low, d.preset());
+  TEST_ASSERT_EQUAL_UINT8(7, d.target(PetState::Idle, false));
+  TEST_ASSERT_EQUAL_UINT8(5, d.target(PetState::Sleep, false));
+  TEST_ASSERT_EQUAL_UINT8(4, d.target(PetState::Idle, false, true));
+  TEST_ASSERT_EQUAL_UINT8(14, d.target(PetState::Idle, true, true));
+
+  d.setPreset(BrightnessPreset::High);
+  TEST_ASSERT_EQUAL_UINT8(16, d.target(PetState::Idle, false));
+  TEST_ASSERT_EQUAL_UINT8(10, d.target(PetState::Sleep, false));
+  TEST_ASSERT_EQUAL_UINT8(4, d.target(PetState::Idle, false, true));
+
+  TEST_ASSERT_EQUAL(BrightnessPreset::Low, brightnessPresetFrom(0));
+  TEST_ASSERT_EQUAL(BrightnessPreset::Medium, brightnessPresetFrom(1));
+  TEST_ASSERT_EQUAL(BrightnessPreset::High, brightnessPresetFrom(2));
+  TEST_ASSERT_EQUAL(BrightnessPreset::Medium, brightnessPresetFrom(99));
+}
+
 void levels_are_clamped_to_the_driver_range() {
   BacklightLevels l;
   l.awake = 0; l.asleep = 40; l.card = 16;
@@ -92,6 +112,25 @@ void pacer_enters_quiet_after_20s_in_idle_or_sleep_and_wakes_immediately() {
   TEST_ASSERT_EQUAL_UINT32(10, p.loopPeriodMs(quietAt + 500, PetState::Idle, false));
 }
 
+void pacer_three_stage_screen_power_and_sleep_toggle() {
+  PowerPacer p;
+  p.touch(1000);
+  TEST_ASSERT_EQUAL(ScreenPowerState::Active, p.screenState(1000 + PowerPacer::kDimAfterMs - 1, PetState::Idle));
+  TEST_ASSERT_EQUAL(ScreenPowerState::Dim, p.screenState(1000 + PowerPacer::kDimAfterMs, PetState::Idle));
+  TEST_ASSERT_EQUAL(ScreenPowerState::Dim, p.screenState(1000 + PowerPacer::kScreenOffAfterMs - 1, PetState::Idle));
+  TEST_ASSERT_EQUAL(ScreenPowerState::Off, p.screenState(1000 + PowerPacer::kScreenOffAfterMs, PetState::Idle));
+  TEST_ASSERT_EQUAL_UINT32(50, p.loopPeriodMs(1000 + PowerPacer::kScreenOffAfterMs, PetState::Idle, false));
+  // Raw button press drops loop period to 10 ms even while screen is Off.
+  TEST_ASSERT_EQUAL_UINT32(10, p.loopPeriodMs(1000 + PowerPacer::kScreenOffAfterMs, PetState::Idle, false, true));
+  // Overlay open keeps screen Active even after 120 s.
+  TEST_ASSERT_EQUAL(ScreenPowerState::Active, p.screenState(1000 + PowerPacer::kScreenOffAfterMs, PetState::Idle, true));
+  // Disabling screen sleep keeps screen at Dim (25 ms loop) after 120 s.
+  p.setSleepEnabled(false);
+  TEST_ASSERT_FALSE(p.sleepEnabled());
+  TEST_ASSERT_EQUAL(ScreenPowerState::Dim, p.screenState(1000 + PowerPacer::kScreenOffAfterMs, PetState::Idle));
+  TEST_ASSERT_EQUAL_UINT32(25, p.loopPeriodMs(1000 + PowerPacer::kScreenOffAfterMs, PetState::Idle, false));
+}
+
 void pacer_survives_millis_wrap() {
   PowerPacer p;
   p.touch(UINT32_MAX - 5000);
@@ -102,12 +141,14 @@ void pacer_survives_millis_wrap() {
 int main() {
   UNITY_BEGIN();
   RUN_TEST(target_by_state_and_card);
+  RUN_TEST(brightness_presets_and_dimmed_target);
   RUN_TEST(levels_are_clamped_to_the_driver_range);
   RUN_TEST(fades_one_step_per_period);
   RUN_TEST(card_jumps_to_full_and_fades_back);
   RUN_TEST(survives_millis_wrap);
   RUN_TEST(pacer_stays_active_during_interaction_and_active_states);
   RUN_TEST(pacer_enters_quiet_after_20s_in_idle_or_sleep_and_wakes_immediately);
+  RUN_TEST(pacer_three_stage_screen_power_and_sleep_toggle);
   RUN_TEST(pacer_survives_millis_wrap);
   return UNITY_END();
 }

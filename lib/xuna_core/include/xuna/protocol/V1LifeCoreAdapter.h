@@ -255,6 +255,15 @@ class V1LifeCoreAdapter {
   const ClockModel& clock() const { return core_.clock(); }
   uint64_t monoNow() const { return core_.mono64(); }
 
+  // Power Phase 2: returns true once per accepted opcode 11 DisplaySettings command.
+  bool takeDisplaySettings(uint8_t& brightness, bool& screenSleep) {
+    if (!displaySettingsPending_) return false;
+    displaySettingsPending_ = false;
+    brightness = displayBrightness_;
+    screenSleep = displayScreenSleep_;
+    return true;
+  }
+
  private:
   uint8_t dispatch(const BleCommand& c, uint32_t now) {
     switch (c.opcode) {
@@ -335,6 +344,12 @@ class V1LifeCoreAdapter {
         }
         return kInvalidArgument;
       }
+      case 11: {
+        displaySettingsPending_ = true;
+        displayBrightness_ = c.arg;
+        displayScreenSleep_ = c.source != 0;
+        return kOk;
+      }
     }
     return kUnknownOpcode;
   }
@@ -373,6 +388,9 @@ class V1LifeCoreAdapter {
   uint8_t action_ = 0;
   uint32_t activeAt_ = 0;
   uint32_t savedAt_ = 0;
+  bool displaySettingsPending_ = false;
+  uint8_t displayBrightness_ = 1;
+  bool displayScreenSleep_ = true;
 };
 
 }  // namespace xuna

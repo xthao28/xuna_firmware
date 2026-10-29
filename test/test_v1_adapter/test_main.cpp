@@ -653,6 +653,40 @@ void knowledge_command_argument_validation() {
   TEST_ASSERT_EQUAL_UINT8(4, rig.send("01 0a 76 00 00 00 07 00 01 01 00 00 01 00 00 00", 2006, id));
 }
 
+void enhanced_display_settings_command_and_validation() {
+  Rig rig(false, true);
+  putS01Pet(rig.store);
+  rig.boot(1000);
+  uint32_t id = 0;
+  uint8_t brightness = 99;
+  bool screenSleep = true;
+  TEST_ASSERT_FALSE(rig.adapter.takeDisplaySettings(brightness, screenSleep));
+
+  // Valid opcode 11: brightness = 2 (High), screenSleep = 0 (false).
+  TEST_ASSERT_EQUAL_UINT8(0, rig.send("01 0b 80 00 00 00 02 00", 2000, id));
+  TEST_ASSERT_EQUAL_UINT32(0x80, id);
+  TEST_ASSERT_TRUE(rig.adapter.takeDisplaySettings(brightness, screenSleep));
+  TEST_ASSERT_EQUAL_UINT8(2, brightness);
+  TEST_ASSERT_FALSE(screenSleep);
+  // Consumed once:
+  TEST_ASSERT_FALSE(rig.adapter.takeDisplaySettings(brightness, screenSleep));
+
+  // Invalid brightness (3) -> invalid_argument (4)
+  TEST_ASSERT_EQUAL_UINT8(4, rig.send("01 0b 81 00 00 00 03 01", 2001, id));
+  // Invalid screenSleep (2) -> invalid_argument (4)
+  TEST_ASSERT_EQUAL_UINT8(4, rig.send("01 0b 82 00 00 00 01 02", 2002, id));
+  // Invalid length (12 bytes) -> invalid_length (2)
+  TEST_ASSERT_EQUAL_UINT8(2, rig.send("01 0b 83 00 00 00 01 01 00 00 00 00", 2003, id));
+}
+
+void baseline_rejects_display_settings() {
+  Rig rig;
+  putS01Pet(rig.store);
+  rig.boot(1000);
+  uint32_t id = 0;
+  TEST_ASSERT_EQUAL_UINT8(3, rig.send("01 0b 84 00 00 00 01 01", 2000, id));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(enhanced_conversation_signal_is_felt_once);
@@ -678,5 +712,7 @@ RUN_TEST(spontaneous_choice_can_be_petted);
   RUN_TEST(enhanced_knowledge_command_flow_and_persistence);
   RUN_TEST(baseline_rejects_knowledge_command);
   RUN_TEST(knowledge_command_argument_validation);
+  RUN_TEST(enhanced_display_settings_command_and_validation);
+  RUN_TEST(baseline_rejects_display_settings);
   return UNITY_END();
 }
