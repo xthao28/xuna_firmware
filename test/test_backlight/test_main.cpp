@@ -56,6 +56,49 @@ void survives_millis_wrap() {
   TEST_ASSERT_EQUAL_UINT8(14, d.update(BacklightDimmer::kStepMs - 11, PetState::Idle, false));
 }
 
+void pacer_stays_active_during_interaction_and_active_states() {
+  PowerPacer p;
+  p.touch(1000);
+  TEST_ASSERT_FALSE(p.isQuiet(1000, PetState::Idle, false));
+  TEST_ASSERT_FALSE(p.isQuiet(1000 + PowerPacer::kQuietAfterMs - 1, PetState::Idle, false));
+  TEST_ASSERT_EQUAL_UINT16(100, p.framePeriodMs(10000, PetState::Idle, false, 100));
+  TEST_ASSERT_EQUAL_UINT32(10, p.loopPeriodMs(10000, PetState::Idle, false));
+  // After 20 s, Happy and Curious still run at full 10 FPS / 10 ms.
+  TEST_ASSERT_FALSE(p.isQuiet(25000, PetState::Happy, false));
+  TEST_ASSERT_FALSE(p.isQuiet(25000, PetState::Curious, false));
+  TEST_ASSERT_EQUAL_UINT16(90, p.framePeriodMs(25000, PetState::Happy, false, 90));
+  TEST_ASSERT_EQUAL_UINT32(10, p.loopPeriodMs(25000, PetState::Curious, false));
+}
+
+void pacer_enters_quiet_after_20s_in_idle_or_sleep_and_wakes_immediately() {
+  PowerPacer p;
+  p.touch(1000);
+  const uint32_t quietAt = 1000 + PowerPacer::kQuietAfterMs;
+  TEST_ASSERT_TRUE(p.isQuiet(quietAt, PetState::Idle, false));
+  TEST_ASSERT_TRUE(p.isQuiet(quietAt, PetState::Sleep, false));
+  TEST_ASSERT_EQUAL_UINT16(200, p.framePeriodMs(quietAt, PetState::Idle, false, 100));
+  TEST_ASSERT_EQUAL_UINT16(220, p.framePeriodMs(quietAt, PetState::Sleep, false, 110));
+  TEST_ASSERT_EQUAL_UINT32(25, p.loopPeriodMs(quietAt, PetState::Idle, false));
+  // Visual overlay / variant / effect / fade keeps 10 FPS and 10 ms loop.
+  TEST_ASSERT_FALSE(p.isQuiet(quietAt, PetState::Idle, true));
+  TEST_ASSERT_EQUAL_UINT16(100, p.framePeriodMs(quietAt, PetState::Idle, true, 100));
+  TEST_ASSERT_EQUAL_UINT32(10, p.loopPeriodMs(quietAt, PetState::Idle, true));
+  // A raw button press immediately drops loop sleep to 10 ms for debouncing.
+  TEST_ASSERT_EQUAL_UINT32(10, p.loopPeriodMs(quietAt, PetState::Idle, false, true));
+  // Touching resets the 20 s window.
+  p.touch(quietAt + 500);
+  TEST_ASSERT_FALSE(p.isQuiet(quietAt + 500, PetState::Idle, false));
+  TEST_ASSERT_EQUAL_UINT16(100, p.framePeriodMs(quietAt + 500, PetState::Idle, false, 100));
+  TEST_ASSERT_EQUAL_UINT32(10, p.loopPeriodMs(quietAt + 500, PetState::Idle, false));
+}
+
+void pacer_survives_millis_wrap() {
+  PowerPacer p;
+  p.touch(UINT32_MAX - 5000);
+  TEST_ASSERT_FALSE(p.isQuiet(10000, PetState::Idle, false));
+  TEST_ASSERT_TRUE(p.isQuiet(14999, PetState::Idle, false));
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(target_by_state_and_card);
@@ -63,5 +106,8 @@ int main() {
   RUN_TEST(fades_one_step_per_period);
   RUN_TEST(card_jumps_to_full_and_fades_back);
   RUN_TEST(survives_millis_wrap);
+  RUN_TEST(pacer_stays_active_during_interaction_and_active_states);
+  RUN_TEST(pacer_enters_quiet_after_20s_in_idle_or_sleep_and_wakes_immediately);
+  RUN_TEST(pacer_survives_millis_wrap);
   return UNITY_END();
 }

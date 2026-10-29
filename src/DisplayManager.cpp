@@ -59,22 +59,30 @@ bool DisplayManager::begin() {
   if(!region_||!window_||!effect_buf_){digitalWrite(kBacklightPin,HIGH);return false;}
   random_=Pcg32(esp_random(),54);const uint32_t now=millis();visual_.begin(now,random_);
   weather_.begin(scene::kGlassW,scene::kGlassH,now,random_);
-  update(now,PetState::Idle);digitalWrite(kBacklightPin,HIGH);
+  // AW9364 powers up at 16/16 after >= 25 us HIGH; turn it on before stepping
+  // so backlightHw_ and the hardware register stay in lockstep.
+  digitalWrite(kBacklightPin,HIGH);delayMicroseconds(35);
+  backlightHw_=BacklightDimmer::kMax;
+  update(now,PetState::Idle);
   Serial.printf("scene=animated region_bytes=%u window_bytes=%u effect_bytes=%u flash_pixels=%u\n",
                 scene::kSpriteWidth*scene::kSpriteHeight*2,scene::kWindowW*scene::kWindowH*2,
                 scene::kEffectW*scene::kEffectH*2,
                 unsigned(sizeof(scene::kBackground)+sizeof(scene::kFrames)+sizeof(scene::kWindows)+sizeof(scene::kEffects)));
   return true;
 }
-// The LED driver steps down one level per short low pulse and wraps from 1
-// to 16 (LilyGO factory example); a low longer than 2.5 ms switches it off.
+// The AW9364 1-wire LED driver steps down one level per short low pulse
+// (0.5..500 us) and wraps from 1 to 16; a low longer than 2.5 ms switches it
+// off. Guard the pulse train against BLE/RTOS interrupts so a preempted LOW
+// never shuts the driver down or drifts out of sync.
 void DisplayManager::setBacklight(uint8_t level){
   if(level<1||level>BacklightDimmer::kMax||level==backlightHw_)return;
   const unsigned pulses=(BacklightDimmer::kMax+backlightHw_-level)%BacklightDimmer::kMax;
+  noInterrupts();
   for(unsigned i=0;i<pulses;++i){
-    digitalWrite(kBacklightPin,LOW);delayMicroseconds(1);
-    digitalWrite(kBacklightPin,HIGH);delayMicroseconds(1);
+    digitalWrite(kBacklightPin,LOW);delayMicroseconds(3);
+    digitalWrite(kBacklightPin,HIGH);delayMicroseconds(3);
   }
+  interrupts();
   backlightHw_=level;
 }
 void DisplayManager::update(uint32_t now,PetState state){
@@ -85,35 +93,43 @@ void DisplayManager::update(uint32_t now,PetState state){
     if(uint32_t(now-cardAt_)>=cardUntil_)closeCard();
     return; // nothing else draws over a card
   }
+  const uint8_t base=visual_.frame(now,state,random_);  // keeps the base timing either way
+  const int variantFrame=variant_.frame(now,state,visual_.interval());
+  const uint8_t frame=variantFrame>=0?uint8_t(variantFrame):base;
+  const bool frameChanged=frame!=lastFrame_;
+  const bool quiet=visual_.interval()>=PowerPacer::kQuietFrameScale*80;
   // Window and effect regions never overlap the pet canvas, so each pushes alone.
   const uint32_t sceneStart=micros();bool sceneDrawn=false;
   bool windowDirty=!windowValid_||backdrop_!=drawnBackdrop_;
-  if(backdrop_==Backdrop::Rain&&weather_.stepRain(now,random_))windowDirty=true;
+  if(backdrop_==Backdrop::Rain&&(!quiet||frameChanged)&&weather_.stepRain(now,random_))windowDirty=true;
   if(backdrop_==Backdrop::Night&&weather_.stepStars(now,scene::kStarCount,random_))windowDirty=true;
   if(windowDirty){drawWindow();sceneDrawn=true;}
   if(speechPage!=drawnSpeechPage_){drawSpeech(speechPage);sceneDrawn=true;}
   const EffectSample sample=effect_.sample(now);
   if(drawnSpeechPage_<0&&(!effectValid_||sample!=drawnEffect_)){drawEffect(sample);sceneDrawn=true;}
   if(sceneDrawn){const uint32_t elapsed=micros()-sceneStart;if(elapsed>maxSceneUs_)maxSceneUs_=elapsed;}
-  const uint8_t base=visual_.frame(now,state,random_);  // keeps the base timing either way
-  const int variantFrame=variant_.frame(now,state,visual_.interval());
-  const uint8_t frame=variantFrame>=0?uint8_t(variantFrame):base;if(frame==lastFrame_)return;
+  if(!frameChanged)return;
   const uint32_t start=micros();
   const uint16_t* pixels=frame>=VariantPlayer::kBaseFrames
       ?scene::kVariantSprites+(frame-VariantPlayer::kBaseFrames)*scene::kSpriteWidth*scene::kSpriteHeight
       :scene::kFrames+frame*scene::kSpriteWidth*scene::kSpriteHeight;
   // Every frame uses the same full canvas: union of previous/current bounding boxes.
   // Restore/composite offscreen, then push one opaque region (no erase-then-draw flicker).
-  for(unsigned y=0;y<scene::kSpriteHeight;++y)for(unsigned x=0;x<scene::kSpriteWidth;++x){
-    const unsigned i=y*scene::kSpriteWidth+x;const uint16_t color=pgm_read_word(pixels+i);
-    region_[i]=color==scene::kTransparent?pgm_read_word(scene::kBackground+(scene::kAnchorY+y)*scene::kWidth+scene::kAnchorX+x):color;
+  for(unsigned y=0;y<scene::kSpriteHeight;++y){
+    const uint16_t* src=pixels+y*scene::kSpriteWidth;
+    const uint16_t* bg=scene::kBackground+(scene::kAnchorY+y)*scene::kWidth+scene::kAnchorX;
+    uint16_t* dst=region_+y*scene::kSpriteWidth;
+    for(unsigned x=0;x<scene::kSpriteWidth;++x){
+      const uint16_t color=src[x];
+      dst[x]=color==scene::kTransparent?bg[x]:color;
+    }
   }
   lcd_.pushImage(scene::kAnchorX,scene::kAnchorY,scene::kSpriteWidth,scene::kSpriteHeight,region_);
   lastFrame_=frame;++draws_;const uint32_t elapsed=micros()-start;if(elapsed>maxDrawUs_)maxDrawUs_=elapsed;
 }
 void DisplayManager::drawWindow(){
   const uint16_t* src=scene::kWindows+unsigned(backdrop_)*scene::kWindowW*scene::kWindowH;
-  for(unsigned i=0;i<unsigned(scene::kWindowW)*scene::kWindowH;++i)window_[i]=pgm_read_word(src+i);
+  for(unsigned i=0;i<unsigned(scene::kWindowW)*scene::kWindowH;++i)window_[i]=src[i];
   auto put=[this](int x,int y,uint16_t color){ // screen coordinates, glass only
     if(x<scene::kGlassX||y<scene::kGlassY||x>=scene::kGlassX+scene::kGlassW||y>=scene::kGlassY+scene::kGlassH)return;
     if(x>=scene::kMullionX0&&x<=scene::kMullionX1)return;
@@ -134,14 +150,21 @@ void DisplayManager::drawWindow(){
   drawnBackdrop_=backdrop_;windowValid_=true;
 }
 void DisplayManager::drawEffect(const EffectSample& sample){
-  for(unsigned y=0;y<scene::kEffectH;++y)for(unsigned x=0;x<scene::kEffectW;++x)
-    effect_buf_[y*scene::kEffectW+x]=pgm_read_word(scene::kBackground+(scene::kEffectY+y)*scene::kWidth+scene::kEffectX+x);
+  for(unsigned y=0;y<scene::kEffectH;++y){
+    const uint16_t* bg=scene::kBackground+(scene::kEffectY+y)*scene::kWidth+scene::kEffectX;
+    uint16_t* dst=effect_buf_+y*scene::kEffectW;
+    for(unsigned x=0;x<scene::kEffectW;++x)dst[x]=bg[x];
+  }
   if(sample.kind!=EffectKind::None&&sample.visible){
     const uint16_t* sprite=scene::kEffects+(unsigned(sample.kind)-1)*scene::kEffectSpriteW*scene::kEffectSpriteH;
     const unsigned ox=(scene::kEffectW-scene::kEffectSpriteW)/2,oy=scene::kEffectH-scene::kEffectSpriteH-sample.rise;
-    for(unsigned y=0;y<scene::kEffectSpriteH;++y)for(unsigned x=0;x<scene::kEffectSpriteW;++x){
-      const uint16_t color=pgm_read_word(sprite+y*scene::kEffectSpriteW+x);
-      if(color!=scene::kTransparent)effect_buf_[(oy+y)*scene::kEffectW+ox+x]=color;
+    for(unsigned y=0;y<scene::kEffectSpriteH;++y){
+      const uint16_t* src=sprite+y*scene::kEffectSpriteW;
+      uint16_t* dst=effect_buf_+(oy+y)*scene::kEffectW+ox;
+      for(unsigned x=0;x<scene::kEffectSpriteW;++x){
+        const uint16_t color=src[x];
+        if(color!=scene::kTransparent)dst[x]=color;
+      }
     }
   }
   lcd_.pushImage(scene::kEffectX,scene::kEffectY,scene::kEffectW,scene::kEffectH,effect_buf_);
@@ -159,8 +182,11 @@ bool DisplayManager::showSpeech(const char* text,uint32_t now){
 void DisplayManager::drawSpeech(int page){
   if(page>=0&&drawnSpeechPage_<0)drawEffect(EffectSample{EffectKind::None,0,false}); // clear rows below the bubble
   if(speechBuf_){
-    for(int y=0;y<kSpeechH;++y)for(int x=0;x<kSpeechW;++x)
-      speechBuf_[y*kSpeechW+x]=pgm_read_word(scene::kBackground+(kSpeechY+y)*scene::kWidth+kSpeechX+x);
+    for(int y=0;y<kSpeechH;++y){
+      const uint16_t* bg=scene::kBackground+(kSpeechY+y)*scene::kWidth+kSpeechX;
+      uint16_t* dst=speechBuf_+y*kSpeechW;
+      for(int x=0;x<kSpeechW;++x)dst[x]=bg[x];
+    }
     if(page>=0){Canvas canvas{speechBuf_,uint16_t(kSpeechW),uint16_t(kSpeechH)};renderSpeechBubble(canvas,ui::kFontValue,speech_,page,kSpeechTailX);}
     lcd_.pushImage(kSpeechX,kSpeechY,kSpeechW,kSpeechH,speechBuf_);
   }

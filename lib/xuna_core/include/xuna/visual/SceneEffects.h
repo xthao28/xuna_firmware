@@ -52,6 +52,7 @@ class ReactionEffect {
   static constexpr uint32_t kBlinkFromMs = 1100;
   static constexpr uint32_t kBlinkMs = 100;
   void start(EffectKind kind, uint32_t now) { kind_ = kind; startAt_ = now; }
+  bool active() const { return kind_ != EffectKind::None; }
   EffectSample sample(uint32_t now) {
     if (kind_ == EffectKind::None) return {EffectKind::None, 0, false};
     const uint32_t elapsed = uint32_t(now - startAt_);

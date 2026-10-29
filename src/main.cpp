@@ -31,6 +31,7 @@ xuna::DisplayManager display;
 xuna::InputManager input;
 xuna::AnimationManager animation;
 xuna::LocalBehavior localBehavior;
+xuna::PowerPacer pacer;
 xuna::NvsSnapshotStore storage;
 xuna::StoreSnapshotCommit storeCommit(storage);
 xuna::IdentityService identity;
@@ -182,6 +183,7 @@ void setup() {
   syncActivityVisual(now);logActivityChange(now);
   Serial.printf("stack tag=setup high_water_bytes=%u\n",unsigned(uxTaskGetStackHighWaterMark(nullptr)));
   localBehavior.activity(now);
+  pacer.touch(now);
   bleReady = ble.begin();
   if (!bleReady) Serial.println("ERROR: BLE queue allocation failed");
   if(storageReady){
@@ -222,7 +224,10 @@ void loop() {
   adapter.tick(now);
   const xuna::IdentityRecord* readyIdentity=
       identity.state()==xuna::IdentityState::Ready ? &identity.record() : nullptr;
-  if (bleReady && ble.update(adapter,readyIdentity,deviceKey,now,displayReady&&lifeReady))localBehavior.activity(now);
+  if (bleReady) {
+    if (ble.update(adapter,readyIdentity,deviceKey,now,displayReady&&lifeReady))localBehavior.activity(now);
+    if (ble.hadTraffic())pacer.touch(now);
+  }
 #ifdef XUNA_NET
   if (bleReady && netReady) {
     xuna::NetOp op=xuna::NetOp::None;xuna::NetConfig config;
@@ -244,8 +249,8 @@ void loop() {
   if (bleReady && displayReady) {
     const char* said=nullptr;
     switch (ble.takeSpeech(said)) {
-      case 1: display.showSpeech(said, now); break;
-      case 2: display.clearSpeech(); break;
+      case 1: display.showSpeech(said, now); pacer.touch(now); break;
+      case 2: display.clearSpeech(); pacer.touch(now); break;
       default: break;
     }
   }
@@ -254,7 +259,7 @@ void loop() {
   const bool anyButton=events.happy||events.idle||events.happyHold||events.idleHold||events.bothHold;
   bool consumed=false;
   if(displayReady&&display.cardOpen()&&anyButton&&!events.bothHold){
-    display.closeCard();consumed=true;localBehavior.activity(now);
+    display.closeCard();consumed=true;localBehavior.activity(now);pacer.touch(now);
     Serial.println("button: card closed");
   }
   if(lifeReady&&!consumed){
@@ -291,19 +296,21 @@ void loop() {
       }
       Serial.printf("button both: hold pairing_card=%u\n",shown?1u:0u);
     }
-    if(anyButton)localBehavior.activity(now);
+    if(anyButton){localBehavior.activity(now);pacer.touch(now);}
     uint8_t quietAction=0;
     // Idle for a while (51–69 s, by temperament): XUNA picks what to do itself; the owner may react.
     if(localBehavior.choosePreferred(now,adapter.last().activity==xuna::Activity::Idle,
                                     static_cast<uint8_t>(adapter.preferred(0)),quietAction,
                                     xuna::Expression::spontaneousWaitMs(core.personality())))
-      adapter.localSpontaneous(now);
+      if(adapter.localSpontaneous(now))pacer.touch(now);
   }
   syncActivityVisual(now);
   logActivityChange(now);
   logTraitShift();
   // Track A: a variant LifeCore started (greeting, yawn, look around, bounce).
-  if(const auto v=core.takeVariant();v!=xuna::VisualVariant::None){
+  const auto v=core.takeVariant();
+  if(v!=xuna::VisualVariant::None){
+    pacer.touch(now);
     if(displayReady)display.playVariant(v,now);
     static const char* const kVariantNames[]={"none","look_around","yawn_stretch","bounce_play","greet_nuzzle"};
     Serial.printf("variant=%s\n",kVariantNames[static_cast<uint8_t>(v)]);
@@ -314,7 +321,8 @@ void loop() {
   animation.setReactionMs(style.reactionMs);
   animation.update(now);
   if(displayReady){
-    display.setFramePeriod(style.framePeriodMs,now);
+    const bool busy=display.visualBusy(now,animation.state());
+    display.setFramePeriod(pacer.framePeriodMs(now,animation.state(),busy,style.framePeriodMs),now);
     display.setBackdrop(xuna::backdropFor(sceneMode,core.clock().dayPart(core.mono64())));
 #ifdef XUNA_E14
     const uint32_t drawsBefore=display.draws(),drawStarted=micros();
@@ -331,12 +339,17 @@ void loop() {
                   unsigned(uxTaskGetStackHighWaterMark(nullptr)));
     if(!saved)Serial.println("ERROR: life snapshot save failed");
   }
+  const uint32_t loopPeriodMs = pacer.loopPeriodMs(
+      now, animation.state(),
+      displayReady && display.visualBusy(now, animation.state()),
+      input.anyRawPressed());
   if (uint32_t(now - diagnosticsAt) >= xuna::kDiagnosticsMs) {
     Serial.printf("scene=animated state=%s loop_gap_max_us=%u draws=%u draw_max_us=%u scene_max_us=%u\n",
                   (animation.state() == xuna::PetState::Idle ? "idle" : (animation.state() == xuna::PetState::Happy ? "happy" : (animation.state() == xuna::PetState::Sleep ? "sleep" : "curious"))), maxLoopGapUs, display.draws(), display.maxDrawUs(), display.maxSceneUs());
     // Heat check: loops per window and the chip's own sensor (not the board surface).
-    Serial.printf("power loops=%u chip_temp_c=%.1f cpu_mhz=%u backlight=%u\n", unsigned(loops), temperatureRead(),
-                  unsigned(getCpuFrequencyMhz()), unsigned(display.backlight()));
+    Serial.printf("power loops=%u chip_temp_c=%.1f cpu_mhz=%u backlight=%u frame_ms=%u loop_ms=%u\n",
+                  unsigned(loops), temperatureRead(), unsigned(getCpuFrequencyMhz()),
+                  unsigned(display.backlight()), unsigned(display.framePeriod()), unsigned(loopPeriodMs));
     logNeeds("needs", now);
     logMemory(); diagnosticsAt = now;
     maxLoopGapUs = 0; loops = 0;
@@ -347,6 +360,6 @@ void loop() {
 #endif
   // Sleep what is left of the period (a slow pass, e.g. a card push, only yields).
   const uint32_t spentMs = (micros() - loopUs) / 1000U;
-  if (spentMs < xuna::kLoopPeriodMs) delay(xuna::kLoopPeriodMs - spentMs);
+  if (spentMs < loopPeriodMs) delay(loopPeriodMs - spentMs);
   else yield();
 }

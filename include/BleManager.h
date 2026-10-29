@@ -51,6 +51,9 @@ class BleManager {
   uint32_t seenSession_=0,sequence_=0;
   uint8_t lastState_=255;
   bool advertising_=true;
+  bool traffic_=false;
+  bool synced_=false,syncSeeded_=false,syncFeedback_=false;
+  uint32_t syncActiveSec_=0,syncGen_=0,syncDecision_=0;
   uint8_t lastLife_[20]={},lastMemories_[2][20]={},lastExplanation_[20]={},lastIdentity_[IdentityCodec::kSize]={};
   uint8_t lastPersonality_[PersonalityProjection::kSize]={};
   uint8_t lastKnowledge_[KnowledgeProjection::kSize]={};
@@ -61,6 +64,12 @@ class BleManager {
     explicit ServerCallbacks(BleManager& o):owner_(o){}
     void onConnect(BLEServer* server,esp_ble_gatts_cb_param_t* param) override {
       if(owner_.connected_){server->disconnect(param->connect.conn_id);return;}
+      if(param->connect.conn_id<=8)
+        esp_ble_tx_power_set(static_cast<esp_ble_power_type_t>(ESP_BLE_PWR_TYPE_CONN_HDL0+param->connect.conn_id),
+                             ESP_PWR_LVL_N0);
+      // Heat: request 20–40 ms connection interval (1.25 ms units), 0 slave
+      // latency and 4 s timeout instead of the central's 7.5–15 ms default.
+      server->updateConnParams(param->connect.remote_bda,0x10,0x20,0,400);
       owner_.central_=param->connect.conn_id;++owner_.session_;owner_.connected_=true;
     }
     void onDisconnect(BLEServer*,esp_ble_gatts_cb_param_t* param) override {
@@ -146,7 +155,13 @@ class BleManager {
     netQueue_=xQueueCreate(4,sizeof(NetPacket));
     if(!netQueue_)return false;
 #endif
-    BLEDevice::init("XUNA");auto* server=BLEDevice::createServer();server->setCallbacks(&serverCallbacks_);
+    BLEDevice::init("XUNA");
+    // Heat (Thermal Phase 1, 2026-10-29): 0 dBm TX power is plenty for room-scale
+    // BLE (5–10 m) and lowers RF die heating during continuous subtitle/status sync.
+    BLEDevice::setPower(ESP_PWR_LVL_N0,ESP_BLE_PWR_TYPE_DEFAULT);
+    BLEDevice::setPower(ESP_PWR_LVL_N0,ESP_BLE_PWR_TYPE_ADV);
+    BLEDevice::setPower(ESP_PWR_LVL_N0,ESP_BLE_PWR_TYPE_SCAN);
+    auto* server=BLEDevice::createServer();server->setCallbacks(&serverCallbacks_);
     // Default createService budget is 15 handles; this service needs 26 (service,
     // 12 characteristics × 2, status CCCD). Too few silently drops 000b/000c.
 #ifdef XUNA_NET
@@ -191,17 +206,22 @@ class BleManager {
     auto* adv=BLEDevice::getAdvertising();adv->addServiceUUID(kService);adv->setScanResponse(true);
     // Heat: advertise every 100–152.5 ms (0.625 ms units), not the library's
     // 20–40 ms; the app scans for up to 12 s, so it still finds XUNA quickly.
-    adv->setMinInterval(0xA0);adv->setMaxInterval(0xF4);adv->start();return true;
+    adv->setMinInterval(0xA0);adv->setMaxInterval(0xF4);
+    adv->setMinPreferred(0x10);adv->setMaxPreferred(0x20);
+    adv->start();return true;
   }
   // All life/learning decisions belong to the pure adapter; callbacks only queue bytes.
   bool update(V1LifeCoreAdapter& adapter,const IdentityRecord* identity,IDeviceSigner& signer,uint32_t now,bool ready) {
+    traffic_=false;
     const auto session=session_.load();
-    if(session!=seenSession_){adapter.onSession();proof_.reset();publishProof(signer);seenSession_=session;}
+    const bool sessionChanged=session!=seenSession_;
+    if(sessionChanged){adapter.onSession();proof_.reset();publishProof(signer);seenSession_=session;}
     if(connected_)advertising_=false;
     else if(!advertising_){BLEDevice::startAdvertising();advertising_=true;}
     Packet p;bool interacted=false,reply=false;
     uint32_t replyId=0;uint8_t replyResult=0;PetState replyState=PetState::Idle;
     if(xQueueReceive(queue_,&p,0)==pdTRUE&&p.session==session&&connected_){
+      traffic_=true;
       uint32_t id=0;
       const uint8_t result=adapter.handle(p.bytes,p.size,now,ready,id);
       AnimationManager presentation;
@@ -226,25 +246,36 @@ class BleManager {
                       int(adapter.clock().tzOffsetMin()));
       }
     }
-    uint8_t b[20];adapter.encodeLife(b);
-    if(std::memcmp(lastLife_,b,sizeof(b))){std::memcpy(lastLife_,b,sizeof(b));lifeStatus_->setValue(b,sizeof(b));}
-    for(uint8_t page=0;page<2;++page){
-      adapter.encodeMemory(page,b);
-      if(std::memcmp(lastMemories_[page],b,sizeof(b))){std::memcpy(lastMemories_[page],b,sizeof(b));memories_[page]->setValue(b,sizeof(b));}
+    // Projections are read-only GATT attributes: skip re-encoding on every loop
+    // pass when disconnected, and when connected only sync on session/command,
+    // state/decision/generation change or 1-second activeSeconds tick.
+    const bool seeded=identity!=nullptr;
+    const uint32_t activeSec=adapter.activeSeconds(),gen=adapter.generation(),decId=adapter.last().decisionId;
+    const bool fb=adapter.canFeedback();
+    if(!synced_||sessionChanged||reply||
+       (connected_&&(seeded!=syncSeeded_||activeSec!=syncActiveSec_||gen!=syncGen_||decId!=syncDecision_||fb!=syncFeedback_))){
+      synced_=true;syncSeeded_=seeded;syncActiveSec_=activeSec;syncGen_=gen;syncDecision_=decId;syncFeedback_=fb;
+      uint8_t b[20];adapter.encodeLife(b);
+      if(std::memcmp(lastLife_,b,sizeof(b))){std::memcpy(lastLife_,b,sizeof(b));lifeStatus_->setValue(b,sizeof(b));}
+      for(uint8_t page=0;page<2;++page){
+        adapter.encodeMemory(page,b);
+        if(std::memcmp(lastMemories_[page],b,sizeof(b))){std::memcpy(lastMemories_[page],b,sizeof(b));memories_[page]->setValue(b,sizeof(b));}
+      }
+      adapter.encodeExplanation(b);
+      if(std::memcmp(lastExplanation_,b,sizeof(b))){std::memcpy(lastExplanation_,b,sizeof(b));explanation_->setValue(b,sizeof(b));}
+      uint8_t persona[PersonalityProjection::kSize];adapter.encodePersonality(seeded,persona);
+      if(std::memcmp(lastPersonality_,persona,sizeof(persona))){std::memcpy(lastPersonality_,persona,sizeof(persona));personality_->setValue(persona,sizeof(persona));}
+      uint8_t know[KnowledgeProjection::kSize];adapter.encodeKnowledge(know);
+      if(std::memcmp(lastKnowledge_,know,sizeof(know))){std::memcpy(lastKnowledge_,know,sizeof(know));knowledge_->setValue(know,sizeof(know));}
+      uint8_t id[IdentityCodec::kSize];IdentityCodec::encode(identity,gen,id);
+      if(std::memcmp(lastIdentity_,id,sizeof(id))){std::memcpy(lastIdentity_,id,sizeof(id));identity_->setValue(id,sizeof(id));}
     }
-    adapter.encodeExplanation(b);
-    if(std::memcmp(lastExplanation_,b,sizeof(b))){std::memcpy(lastExplanation_,b,sizeof(b));explanation_->setValue(b,sizeof(b));}
-    uint8_t persona[PersonalityProjection::kSize];adapter.encodePersonality(identity!=nullptr,persona);
-    if(std::memcmp(lastPersonality_,persona,sizeof(persona))){std::memcpy(lastPersonality_,persona,sizeof(persona));personality_->setValue(persona,sizeof(persona));}
-    uint8_t know[KnowledgeProjection::kSize];adapter.encodeKnowledge(know);
-    if(std::memcmp(lastKnowledge_,know,sizeof(know))){std::memcpy(lastKnowledge_,know,sizeof(know));knowledge_->setValue(know,sizeof(know));}
-    uint8_t id[IdentityCodec::kSize];IdentityCodec::encode(identity,adapter.generation(),id);
-    if(std::memcmp(lastIdentity_,id,sizeof(id))){std::memcpy(lastIdentity_,id,sizeof(id));identity_->setValue(id,sizeof(id));}
     // Speech text is display only: it never reaches the adapter, and only
     // its size is logged.
     SpeechPacket chunk;
     while(xQueueReceive(speechQueue_,&chunk,0)==pdTRUE){
       if(chunk.session!=session||!connected_)continue;
+      traffic_=true;
       const auto result=speech_.feed(chunk.bytes,chunk.size);
       if(result==SpeechTextAssembler::Result::Ready)speechPending_=1;
       else if(result==SpeechTextAssembler::Result::Cleared)speechPending_=2;
@@ -255,6 +286,7 @@ class BleManager {
     NetPacket netFrame;
     while(xQueueReceive(netQueue_,&netFrame,0)==pdTRUE){
       if(netFrame.session==session&&connected_){
+        traffic_=true;
         const auto result=netCodec_.feed(netFrame.bytes,netFrame.size);
         if(result==NetConfigCodec::Result::Ready)netReady_=true;
         if(result!=NetConfigCodec::Result::Partial)
@@ -265,8 +297,9 @@ class BleManager {
 #endif
     ProofPacket proofRequest;
     if(xQueueReceive(proofQueue_,&proofRequest,0)==pdTRUE&&proofRequest.session==session&&connected_&&
-       proof_.accept(proofRequest.bytes,proofRequest.size))publishProof(signer);
+       proof_.accept(proofRequest.bytes,proofRequest.size)){traffic_=true;publishProof(signer);}
     if(proof_.status()==ProofStatus::Pending){
+      traffic_=true;
       const uint32_t started=micros();
       if(proof_.poll(identity,adapter.generation(),signer))publishProof(signer);
       Serial.printf("device_proof status=%u sign_us=%u\n",unsigned(proof_.status()),unsigned(micros()-started));
@@ -281,6 +314,7 @@ class BleManager {
 #endif
     return interacted;
   }
+  bool hadTraffic() const {return traffic_;}
   // 0 nothing new, 1 show `text`, 2 clear; each text is handed over once.
   uint8_t takeSpeech(const char*& text) {
     const uint8_t pending=speechPending_;speechPending_=0;text=speech_.text();return pending;
