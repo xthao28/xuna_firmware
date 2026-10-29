@@ -3,6 +3,7 @@
 #include <unity.h>
 
 #include <xuna/learning/HabitPredictor.h>
+#include <xuna/learning/RoutineCodec.h>
 #include <xuna/lab/BoardLab.h>
 #include <xuna/persist/SnapshotCodec.h>
 
@@ -129,6 +130,41 @@ void no_trusted_time_no_routine_and_forget_clears_it() {
   TEST_ASSERT_EQUAL_UINT16(0, lab.snapshot().habit.sessions);
 }
 
+void routine_codec_encodes_weekday_weekend_and_validates() {
+  HabitState s;
+  uint8_t out[RoutineCodec::kSize] = {};
+  const RoutineProjection empty = RoutineCodec::fromHabit(s, true);
+  TEST_ASSERT_FALSE(empty.ready);
+  TEST_ASSERT_FALSE(empty.anticipated);
+  TEST_ASSERT_TRUE(RoutineCodec::encode(empty, out));
+  TEST_ASSERT_EQUAL_UINT8(1, out[0]);
+  TEST_ASSERT_EQUAL_UINT8(8, out[1]);
+  TEST_ASSERT_EQUAL_UINT8(0, out[2]);
+  TEST_ASSERT_EQUAL_UINT8(0, out[7]);
+
+  for (uint32_t d = 0; d < 28; ++d) {
+    const uint32_t day = kMonday + d;
+    HabitPredictor::observe(
+        s, day, HabitPredictor::weekend(day) ? 9 * 60 + 40 : 19 * 60 + 10);
+  }
+  const RoutineProjection ready = RoutineCodec::fromHabit(s, true);
+  TEST_ASSERT_TRUE(ready.ready);
+  TEST_ASSERT_TRUE(ready.weekdayKnown);
+  TEST_ASSERT_TRUE(ready.weekendKnown);
+  TEST_ASSERT_TRUE(ready.anticipated);
+  TEST_ASSERT_TRUE(RoutineCodec::encode(ready, out));
+  TEST_ASSERT_EQUAL_UINT8(0x0f, out[2]);
+  TEST_ASSERT_EQUAL_UINT8(19, out[3]);
+  TEST_ASSERT_EQUAL_UINT8(10, out[4]);
+  TEST_ASSERT_EQUAL_UINT8(9, out[5]);
+  TEST_ASSERT_EQUAL_UINT8(40, out[6]);
+  TEST_ASSERT_EQUAL_UINT8(28, out[7]);
+
+  RoutineProjection bad = ready;
+  bad.weekdayHour = 24;
+  TEST_ASSERT_FALSE(RoutineCodec::encode(bad, out));
+}
+
 void setUp() {}
 void tearDown() {}
 
@@ -142,5 +178,6 @@ int main() {
   RUN_TEST(expects_fires_shortly_before_the_usual_arrival);
   RUN_TEST(habit_section_round_trips_and_is_omitted_when_empty);
   RUN_TEST(no_trusted_time_no_routine_and_forget_clears_it);
+  RUN_TEST(routine_codec_encodes_weekday_weekend_and_validates);
   return UNITY_END();
 }

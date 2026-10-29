@@ -8,6 +8,7 @@
 #include <xuna/identity/IdentityService.h>
 #include <xuna/learning/ExplanationCodec.h>
 #include <xuna/learning/LearnerVocabulary.h>
+#include <xuna/learning/RoutineCodec.h>
 #include <xuna/life/BootSequence.h>
 #include <xuna/life/LifeCore.h>
 #include <xuna/persist/SnapshotStore.h>
@@ -253,6 +254,17 @@ class V1LifeCoreAdapter {
       for (size_t i = 0; i < LifecycleCodec::kSize; ++i) bytes[i] = 0;
       bytes[0] = 1;
       bytes[1] = LifecycleCodec::kSize;
+    }
+  }
+
+  // Routine V1 projection (7a6e0014, 8 bytes): weekday/weekend arrival + sessions.
+  void encodeRoutine(uint8_t* bytes) const {
+    const RoutineProjection p = RoutineCodec::fromHabit(
+        core_.snapshot().habit, last_.anticipated);
+    if (!RoutineCodec::encode(p, bytes)) {
+      for (size_t i = 0; i < RoutineCodec::kSize; ++i) bytes[i] = 0;
+      bytes[0] = 1;
+      bytes[1] = RoutineCodec::kSize;
     }
   }
 

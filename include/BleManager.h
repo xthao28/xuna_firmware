@@ -46,6 +46,7 @@ class BleManager {
   BLECharacteristic* personality_=nullptr;
   BLECharacteristic* knowledge_=nullptr;
   BLECharacteristic* lifecycle_=nullptr;
+  BLECharacteristic* routine_=nullptr;
   BLECharacteristic* memories_[2]={nullptr,nullptr};
   std::atomic<bool> connected_{false};
   std::atomic<uint32_t> session_{0};
@@ -60,6 +61,7 @@ class BleManager {
   uint8_t lastPersonality_[PersonalityProjection::kSize]={};
   uint8_t lastKnowledge_[KnowledgeProjection::kSize]={};
   uint8_t lastLifecycle_[LifecycleCodec::kSize]={};
+  uint8_t lastRoutine_[RoutineCodec::kSize]={};
   std::atomic<uint16_t> central_{0xffff};
   class ServerCallbacks: public BLEServerCallbacks {
     BleManager& owner_;
@@ -168,9 +170,9 @@ class BleManager {
     // Default createService budget is 15 handles; this service needs 28 (service,
     // 13 characteristics × 2, status CCCD). Too few silently drops 000b/000c/0013.
 #ifdef XUNA_NET
-    auto* service=server->createService(BLEUUID(kService),44);  // + 0011 (2) and 0012 (3)
+    auto* service=server->createService(BLEUUID(kService),48);  // + 0011 (2) and 0012 (3)
 #else
-    auto* service=server->createService(BLEUUID(kService),36);
+    auto* service=server->createService(BLEUUID(kService),40);
 #endif
     auto* caps=service->createCharacteristic("7a6e0002-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ);
     // byte 2 bit 6: Hatch command (opcode 7) + Lifecycle V1 projection (7a6e0013, S10).
@@ -181,10 +183,11 @@ class BleManager {
     // byte 4 bits 4–7: Track A variant preview (opcode 1 args 4–7).
     // byte 3 bit 6: Wi-Fi setup 7a6e0011 + network projection 7a6e0012 (DC-2, XUNA_NET builds only).
     // byte 3 bit 7: display brightness & screen sleep settings (opcode 11, Power Phase 2).
+    // byte 5 bit 2: Routine V1 projection (7a6e0014, routine learning).
 #ifdef XUNA_NET
-    uint8_t b[8]={1,8,0xff,0xff,0xff,3,0x60,0x09};caps->setValue(b,sizeof(b));
+    uint8_t b[8]={1,8,0xff,0xff,0xff,0x07,0x60,0x09};caps->setValue(b,sizeof(b));
 #else
-    uint8_t b[8]={1,8,0xff,0xbf,0xff,3,0x60,0x09};caps->setValue(b,sizeof(b));
+    uint8_t b[8]={1,8,0xff,0xbf,0xff,0x07,0x60,0x09};caps->setValue(b,sizeof(b));
 #endif
     auto* command=service->createCharacteristic("7a6e0003-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_WRITE);command->setCallbacks(&writeCallbacks_);
     status_=service->createCharacteristic("7a6e0004-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ|BLECharacteristic::PROPERTY_NOTIFY);status_->addDescriptor(new BLE2902());
@@ -200,6 +203,7 @@ class BleManager {
     auto* speech=service->createCharacteristic("7a6e0010-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_WRITE);
     speech->setCallbacks(&speechCallbacks_);
     lifecycle_=service->createCharacteristic("7a6e0013-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ);
+    routine_=service->createCharacteristic("7a6e0014-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ);
 #ifdef XUNA_NET
     auto* netConfig=service->createCharacteristic("7a6e0011-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_WRITE);
     netConfig->setCallbacks(&netCallbacks_);
@@ -285,6 +289,8 @@ class BleManager {
       if(std::memcmp(lastIdentity_,id,sizeof(id))){std::memcpy(lastIdentity_,id,sizeof(id));identity_->setValue(id,sizeof(id));}
       uint8_t lc[LifecycleCodec::kSize];adapter.encodeLifecycle(lc);
       if(std::memcmp(lastLifecycle_,lc,sizeof(lc))){std::memcpy(lastLifecycle_,lc,sizeof(lc));lifecycle_->setValue(lc,sizeof(lc));}
+      uint8_t rt[RoutineCodec::kSize];adapter.encodeRoutine(rt);
+      if(std::memcmp(lastRoutine_,rt,sizeof(rt))){std::memcpy(lastRoutine_,rt,sizeof(rt));routine_->setValue(rt,sizeof(rt));}
     }
     // Speech text is display only: it never reaches the adapter, and only
     // its size is logged.
