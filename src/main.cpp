@@ -44,6 +44,8 @@ xuna::BleManager ble;
 xuna::DeviceKey deviceKey;
 xuna::ScenePreference scenePreference;
 xuna::SceneMode sceneMode = xuna::SceneMode::Auto;
+xuna::EggHatchHold eggHatchHold;
+struct HardwareEntropy : xuna::IRandom { uint32_t next() override { return esp_random(); } } entropy;
 #ifdef XUNA_E14
 xuna::E14Diagnostics e14;  // E14 gate metrics; XUNA_E14=1 also starts the network probe
 #endif
@@ -166,9 +168,9 @@ void setup() {
   const bool storageReady=storage.begin();
   // Boot-only scratch is static so recovery does not add another snapshot to the stack.
   static xuna::LifeSnapshotV2 recovered;
-  struct HardwareEntropy : xuna::IRandom { uint32_t next() override { return esp_random(); } } entropy;
   const auto boot=xuna::BootSequence::run(storage,storageReady,snapshotCommit,core,identity,
                                           entropy,recovered,now);
+  adapter.attachIdentity(&identity,&storage,&entropy);
   const auto& report=boot.recovery;
   lifeReady=boot.lifeReady;
   persistReady=boot.persistReady();
@@ -228,6 +230,7 @@ void loop() {
 #endif
   const uint32_t now = millis();
   adapter.tick(now);
+  persistReady = lifeReady && identity.state() == xuna::IdentityState::Ready;
   const xuna::IdentityRecord* readyIdentity=
       identity.state()==xuna::IdentityState::Ready ? &identity.record() : nullptr;
   if (bleReady) {
@@ -237,6 +240,8 @@ void loop() {
       if(displayReady&&display.screenSleeping())display.wake(now,animation.state());
     }
   }
+  persistReady = lifeReady && identity.state() == xuna::IdentityState::Ready;
+  readyIdentity = identity.state()==xuna::IdentityState::Ready ? &identity.record() : nullptr;
   {
     uint8_t bright=0;bool sleepOn=true;
     if(adapter.takeDisplaySettings(bright,sleepOn)){
@@ -311,6 +316,37 @@ void loop() {
       const bool saved=scenePreference.save(sceneMode);
       Serial.printf("button GPIO14: hold scene_mode=%s saved=%u\n",sceneName(sceneMode),saved?1u:0u);
       display.showEffect(xuna::EffectKind::Sparkle,now);
+    }
+    const bool inEgg = identity.state() == xuna::IdentityState::Egg &&
+                       (!displayReady || (!display.screenSleeping() && !display.cardOpen()));
+    const auto hatchHold = eggHatchHold.update(inEgg, input.idlePressed(), input.happyPressed(), now);
+    if (hatchHold.started || hatchHold.stepChanged) {
+      localBehavior.activity(now);
+      pacer.touch(now);
+      if (displayReady) {
+        display.showEffect(xuna::EffectKind::Sparkle, now);
+        static const char* const kHoldPrompts[] = {
+            "Giữ nút để nở trứng... (3s)",
+            "Giữ thêm chút nữa... (2s)",
+            "Sắp nở rồi... (1s)",
+        };
+        if (hatchHold.step < 3) display.showSpeech(kHoldPrompts[hatchHold.step], now);
+      }
+    }
+    if (hatchHold.canceled && displayReady) {
+      display.clearSpeech();
+    }
+    if (hatchHold.triggered) {
+      const bool hatched = adapter.hatchOnDevice();
+      persistReady = lifeReady && identity.state() == xuna::IdentityState::Ready;
+      readyIdentity = identity.state() == xuna::IdentityState::Ready ? &identity.record() : nullptr;
+      localBehavior.activity(now);
+      pacer.touch(now);
+      if (displayReady) {
+        display.showEffect(hatched ? xuna::EffectKind::Heart : xuna::EffectKind::Puff, now);
+        display.showSpeech(hatched ? "Chào bạn! Mình vừa nở rồi nè!" : "Chưa nở được, thử lại nhé", now);
+      }
+      Serial.printf("button GPIO14: egg_hatch=%u\n", hatched ? 1u : 0u);
     }
     // GPIO0 hold: status card (age, energy, what XUNA learned, usual arrival).
     if(events.happyHold&&displayReady){

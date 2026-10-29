@@ -45,6 +45,7 @@ class BleManager {
   BLECharacteristic* proofChar_=nullptr;
   BLECharacteristic* personality_=nullptr;
   BLECharacteristic* knowledge_=nullptr;
+  BLECharacteristic* lifecycle_=nullptr;
   BLECharacteristic* memories_[2]={nullptr,nullptr};
   std::atomic<bool> connected_{false};
   std::atomic<uint32_t> session_{0};
@@ -53,10 +54,12 @@ class BleManager {
   bool advertising_=true;
   bool traffic_=false;
   bool synced_=false,syncSeeded_=false,syncFeedback_=false;
+  uint8_t syncClockQuality_=255;
   uint32_t syncActiveSec_=0,syncGen_=0,syncDecision_=0;
   uint8_t lastLife_[20]={},lastMemories_[2][20]={},lastExplanation_[20]={},lastIdentity_[IdentityCodec::kSize]={};
   uint8_t lastPersonality_[PersonalityProjection::kSize]={};
   uint8_t lastKnowledge_[KnowledgeProjection::kSize]={};
+  uint8_t lastLifecycle_[LifecycleCodec::kSize]={};
   std::atomic<uint16_t> central_{0xffff};
   class ServerCallbacks: public BLEServerCallbacks {
     BleManager& owner_;
@@ -162,14 +165,15 @@ class BleManager {
     BLEDevice::setPower(ESP_PWR_LVL_N0,ESP_BLE_PWR_TYPE_ADV);
     BLEDevice::setPower(ESP_PWR_LVL_N0,ESP_BLE_PWR_TYPE_SCAN);
     auto* server=BLEDevice::createServer();server->setCallbacks(&serverCallbacks_);
-    // Default createService budget is 15 handles; this service needs 26 (service,
-    // 12 characteristics × 2, status CCCD). Too few silently drops 000b/000c.
+    // Default createService budget is 15 handles; this service needs 28 (service,
+    // 13 characteristics × 2, status CCCD). Too few silently drops 000b/000c/0013.
 #ifdef XUNA_NET
-    auto* service=server->createService(BLEUUID(kService),40);  // + 0011 (2) and 0012 (3)
+    auto* service=server->createService(BLEUUID(kService),44);  // + 0011 (2) and 0012 (3)
 #else
-    auto* service=server->createService(BLEUUID(kService),32);
+    auto* service=server->createService(BLEUUID(kService),36);
 #endif
     auto* caps=service->createCharacteristic("7a6e0002-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ);
+    // byte 2 bit 6: Hatch command (opcode 7) + Lifecycle V1 projection (7a6e0013, S10).
     // byte 3 bit 0: Identity V2 device proof (7a6e000d); bit 1: personality projection (7a6e000e).
     // byte 3 bit 2: conversation signal (opcode 8, PE-4c); bit 3: personality control (opcode 9, PE-4d).
     // byte 3 bit 4: knowledge domains (7a6e000f, opcode 10, KD-2).
@@ -178,9 +182,9 @@ class BleManager {
     // byte 3 bit 6: Wi-Fi setup 7a6e0011 + network projection 7a6e0012 (DC-2, XUNA_NET builds only).
     // byte 3 bit 7: display brightness & screen sleep settings (opcode 11, Power Phase 2).
 #ifdef XUNA_NET
-    uint8_t b[8]={1,8,0xbf,0xff,0xff,3,0x60,0x09};caps->setValue(b,sizeof(b));
+    uint8_t b[8]={1,8,0xff,0xff,0xff,3,0x60,0x09};caps->setValue(b,sizeof(b));
 #else
-    uint8_t b[8]={1,8,0xbf,0xbf,0xff,3,0x60,0x09};caps->setValue(b,sizeof(b));
+    uint8_t b[8]={1,8,0xff,0xbf,0xff,3,0x60,0x09};caps->setValue(b,sizeof(b));
 #endif
     auto* command=service->createCharacteristic("7a6e0003-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_WRITE);command->setCallbacks(&writeCallbacks_);
     status_=service->createCharacteristic("7a6e0004-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ|BLECharacteristic::PROPERTY_NOTIFY);status_->addDescriptor(new BLE2902());
@@ -195,6 +199,7 @@ class BleManager {
     knowledge_=service->createCharacteristic("7a6e000f-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ);
     auto* speech=service->createCharacteristic("7a6e0010-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_WRITE);
     speech->setCallbacks(&speechCallbacks_);
+    lifecycle_=service->createCharacteristic("7a6e0013-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ);
 #ifdef XUNA_NET
     auto* netConfig=service->createCharacteristic("7a6e0011-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_WRITE);
     netConfig->setCallbacks(&netCallbacks_);
@@ -244,6 +249,8 @@ class BleManager {
         Serial.printf("knowledge arg=%u slot=%u result=%u\n",unsigned(p.bytes[6]),unsigned(p.bytes[8]),result);
       if(p.size>=8&&p.bytes[1]==11)
         Serial.printf("display_cmd bright=%u sleep=%u result=%u\n",unsigned(p.bytes[6]),unsigned(p.bytes[7]),result);
+      if(p.size>=2&&p.bytes[1]==7)
+        Serial.printf("hatch_cmd result=%u\n",result);
       if(p.size>=2&&p.bytes[1]==5){
         const auto quality=adapter.clock().quality(adapter.monoNow());
         const auto part=adapter.clock().dayPart(adapter.monoNow());
@@ -258,9 +265,10 @@ class BleManager {
     const bool seeded=identity!=nullptr;
     const uint32_t activeSec=adapter.activeSeconds(),gen=adapter.generation(),decId=adapter.last().decisionId;
     const bool fb=adapter.canFeedback();
+    const uint8_t cq=static_cast<uint8_t>(adapter.clock().quality(adapter.monoNow()));
     if(!synced_||sessionChanged||reply||
-       (connected_&&(seeded!=syncSeeded_||activeSec!=syncActiveSec_||gen!=syncGen_||decId!=syncDecision_||fb!=syncFeedback_))){
-      synced_=true;syncSeeded_=seeded;syncActiveSec_=activeSec;syncGen_=gen;syncDecision_=decId;syncFeedback_=fb;
+       (connected_&&(seeded!=syncSeeded_||activeSec!=syncActiveSec_||gen!=syncGen_||decId!=syncDecision_||fb!=syncFeedback_||cq!=syncClockQuality_))){
+      synced_=true;syncSeeded_=seeded;syncActiveSec_=activeSec;syncGen_=gen;syncDecision_=decId;syncFeedback_=fb;syncClockQuality_=cq;
       uint8_t b[20];adapter.encodeLife(b);
       if(std::memcmp(lastLife_,b,sizeof(b))){std::memcpy(lastLife_,b,sizeof(b));lifeStatus_->setValue(b,sizeof(b));}
       for(uint8_t page=0;page<2;++page){
@@ -275,6 +283,8 @@ class BleManager {
       if(std::memcmp(lastKnowledge_,know,sizeof(know))){std::memcpy(lastKnowledge_,know,sizeof(know));knowledge_->setValue(know,sizeof(know));}
       uint8_t id[IdentityCodec::kSize];IdentityCodec::encode(identity,gen,id);
       if(std::memcmp(lastIdentity_,id,sizeof(id))){std::memcpy(lastIdentity_,id,sizeof(id));identity_->setValue(id,sizeof(id));}
+      uint8_t lc[LifecycleCodec::kSize];adapter.encodeLifecycle(lc);
+      if(std::memcmp(lastLifecycle_,lc,sizeof(lc))){std::memcpy(lastLifecycle_,lc,sizeof(lc));lifecycle_->setValue(lc,sizeof(lc));}
     }
     // Speech text is display only: it never reaches the adapter, and only
     // its size is logged.

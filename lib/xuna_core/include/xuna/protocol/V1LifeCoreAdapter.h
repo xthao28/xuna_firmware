@@ -4,8 +4,11 @@
 #include <cstdint>
 
 #include <xuna/BleProtocol.h>
+#include <xuna/LifecycleCodec.h>
+#include <xuna/identity/IdentityService.h>
 #include <xuna/learning/ExplanationCodec.h>
 #include <xuna/learning/LearnerVocabulary.h>
+#include <xuna/life/BootSequence.h>
 #include <xuna/life/LifeCore.h>
 #include <xuna/persist/SnapshotStore.h>
 #include <xuna/personality/PersonalityProjection.h>
@@ -72,6 +75,36 @@ class V1LifeCoreAdapter {
     observe(core_.step(LifeCoreStepInput(now)));
   }
 
+  // S10 hatch & same-boot bornAt backfill: wires identity persistence and RNG.
+  void attachIdentity(IdentityService* identity, IBootStore* store, IRandom* entropy) {
+    identity_ = identity;
+    identityStore_ = store;
+    entropy_ = entropy;
+  }
+
+  // S10 commit-first hatch (device GPIO14 3s hold or BLE opcode 7).
+  uint8_t hatch(IdentityOrigin origin) {
+    if (!identity_ || !identityStore_ || !entropy_) return kNotReady;
+    if (identity_->state() == IdentityState::Safe) return kNotReady;
+    if (identity_->state() != IdentityState::Egg) return kInvalidArgument;
+    IdentityEntropy fresh;
+    for (size_t i = 0; i < 4; ++i)
+      LifeEngine::put32(fresh.petId + i * 4, entropy_->next());
+    fresh.seed = entropy_->next();
+    IdentityRecord candidate;
+    if (!identity_->prepareHatch(fresh, origin, activeSeconds(), core_.mono64(),
+                                 core_.clock(), candidate))
+      return kInvalidArgument;
+    if (!identityStore_->writeIdentity(candidate) ||
+        !identity_->acceptPersisted(candidate))
+      return kNotReady;
+    core_.seedPersonality(identity_->record().seed);
+    core_.previewVariant(VisualVariant::GreetNuzzle);
+    return kOk;
+  }
+
+  bool hatchOnDevice() { return hatch(IdentityOrigin::HatchedOnDevice) == kOk; }
+
   // A BLE connect or disconnect: v1 clears the request cache and the
   // rateable app decision.
   void onSession() {
@@ -85,8 +118,8 @@ class V1LifeCoreAdapter {
   // echoed in the status value.
   uint8_t handle(const uint8_t* bytes, size_t size, uint32_t now, bool ready,
                  uint32_t& id) {
-    const BleCommand c = parseCommand(bytes, size, enhancedLearning_, true, false, enhancedLearning_,
-                                        enhancedLearning_, enhancedLearning_);
+    const BleCommand c = parseCommand(bytes, size, enhancedLearning_, true, enhancedLearning_,
+                                        enhancedLearning_, enhancedLearning_, enhancedLearning_);
     id = c.id;
     uint8_t result = c.error;
     const int duplicate = size <= kMaxPacket ? cache_.find(bytes, size) : -1;
@@ -187,6 +220,41 @@ class V1LifeCoreAdapter {
     KnowledgeProjection::encode(core_.knowledge(), trusted, bytes);
   }
   const KnowledgeProfile& knowledge() const { return core_.knowledge(); }
+
+  // Lifecycle V1 projection (7a6e0013, S10, 8 bytes).
+  void encodeLifecycle(uint8_t* bytes) const {
+    LifecycleProjection p;
+    p.clock = static_cast<ClockWireQuality>(core_.clock().quality(core_.mono64()));
+    if (identity_) {
+      switch (identity_->state()) {
+        case IdentityState::Egg:
+        case IdentityState::NeedsMigration:
+          p.identity = IdentityWireState::Egg;
+          p.stage = GrowthWireStage::Egg;
+          break;
+        case IdentityState::Ready: {
+          const IdentityRecord& r = identity_->record();
+          p.identity = IdentityWireState::Ready;
+          p.stage = GrowthWireStage::Newborn;
+          p.birth = r.bornAtQuality == ClockQuality::Synced
+                        ? BirthWireQuality::Synced
+                        : BirthWireQuality::Unknown;
+          p.origin = static_cast<IdentityWireOrigin>(r.origin);
+          p.hasBornAt = p.birth == BirthWireQuality::Synced;
+          break;
+        }
+        case IdentityState::Safe:
+          p.identity = IdentityWireState::Safe;
+          p.stage = GrowthWireStage::Egg;
+          break;
+      }
+    }
+    if (!LifecycleCodec::encode(p, bytes)) {
+      for (size_t i = 0; i < LifecycleCodec::kSize; ++i) bytes[i] = 0;
+      bytes[0] = 1;
+      bytes[1] = LifecycleCodec::kSize;
+    }
+  }
 
   // Last durable snapshot generation (Identity V1 projection ordering key).
   uint32_t generation() const { return core_.snapshot().generation; }
@@ -306,8 +374,19 @@ class V1LifeCoreAdapter {
         const int64_t utcMs = static_cast<int64_t>(c.utcSeconds) * 1000LL;
         const SyncResult result = core_.sync(
             utcMs, c.tzOffsetMin, TimeSource::Phone, now);
-        return result.status == SyncStatus::Accepted ? kOk : kInvalidArgument;
+        if (result.status != SyncStatus::Accepted) return kInvalidArgument;
+        if (identity_ && identityStore_) {
+          IdentityRecord updated;
+          if (identity_->prepareBornAt(core_.clock(), core_.mono64(), updated)) {
+            if (!identityStore_->writeIdentity(updated) ||
+                !identity_->acceptPersisted(updated))
+              return kNotReady;
+          }
+        }
+        return kOk;
       }
+      case 7:
+        return hatch(IdentityOrigin::HatchedViaApp);
       case 6: {
         const LifeCoreEvent event(LifeCoreEventKind::StatedPreference,c.id,
                                   c.contextKey,c.action,c.arg==1,c.source);
@@ -391,6 +470,9 @@ class V1LifeCoreAdapter {
   bool displaySettingsPending_ = false;
   uint8_t displayBrightness_ = 1;
   bool displayScreenSleep_ = true;
+  IdentityService* identity_ = nullptr;
+  IBootStore* identityStore_ = nullptr;
+  IRandom* entropy_ = nullptr;
 };
 
 }  // namespace xuna

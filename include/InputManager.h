@@ -19,6 +19,8 @@ public:
   bool anyRawPressed() const {
     return rawPressed_ || happy_.pressed() || idle_.pressed();
   }
+  bool happyPressed() const { return happy_.pressed(); }
+  bool idlePressed() const { return idle_.pressed(); }
 
 private:
   DebouncedButton happy_, idle_;

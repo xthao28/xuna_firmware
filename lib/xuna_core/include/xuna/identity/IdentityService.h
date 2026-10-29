@@ -50,4 +50,62 @@ class IdentityService {
   }
   uint32_t boot_=0;IdentityState state_=IdentityState::Safe;IdentityRecord record_;
 };
+
+// S10 protocol freeze: 3-second single-button hold on GPIO14 in Egg hatches
+// the pet on the device; releasing early or pressing GPIO0 cancels cleanly.
+struct EggHatchHoldOutput {
+  bool holding = false;
+  bool started = false;
+  bool stepChanged = false;
+  bool canceled = false;
+  bool triggered = false;
+  uint8_t step = 0;  // 0: 0–1s, 1: 1–2s, 2: 2–3s, 3: 3s completed
+};
+
+class EggHatchHold {
+ public:
+  static constexpr uint32_t kHoldMs = 3000;
+
+  EggHatchHoldOutput update(bool inEgg, bool idlePressed, bool happyPressed, uint32_t now) {
+    EggHatchHoldOutput out;
+    if (!inEgg || !idlePressed || happyPressed) {
+      if (holding_ && !fired_) out.canceled = true;
+      if (!idlePressed) fired_ = false;
+      holding_ = false;
+      step_ = 0;
+      return out;
+    }
+    if (fired_) return out;
+    if (!holding_) {
+      holding_ = true;
+      startedAt_ = now;
+      step_ = 0;
+      out.holding = true;
+      out.started = true;
+      return out;
+    }
+    const uint32_t elapsed = uint32_t(now - startedAt_);
+    if (elapsed >= kHoldMs) {
+      fired_ = true;
+      step_ = 3;
+      out.step = 3;
+      out.triggered = true;
+      return out;
+    }
+    const uint8_t nextStep = elapsed >= 2000U ? 2U : (elapsed >= 1000U ? 1U : 0U);
+    if (nextStep != step_) {
+      step_ = nextStep;
+      out.stepChanged = true;
+    }
+    out.holding = true;
+    out.step = step_;
+    return out;
+  }
+
+ private:
+  uint32_t startedAt_ = 0;
+  uint8_t step_ = 0;
+  bool holding_ = false;
+  bool fired_ = false;
+};
 }

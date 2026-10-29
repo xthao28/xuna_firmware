@@ -687,6 +687,126 @@ void baseline_rejects_display_settings() {
   TEST_ASSERT_EQUAL_UINT8(3, rig.send("01 0b 84 00 00 00 01 01", 2000, id));
 }
 
+struct FakeIdentityStore : MemorySnapshotStore, IBootStore {
+  uint32_t boot = 1;
+  IdentityLoad load = IdentityLoad::Missing;
+  IdentityRecord stored;
+  bool failWrite = false;
+  uint32_t writes = 0;
+  bool read(SnapshotKey key, uint8_t* out, size_t capacity, size_t& size) override {
+    return MemorySnapshotStore::read(key, out, capacity, size);
+  }
+  bool write(SnapshotKey key, const uint8_t* bytes, size_t size) override {
+    return MemorySnapshotStore::write(key, bytes, size);
+  }
+  uint32_t nextBoot() override { return boot; }
+  IdentityLoad readIdentity(IdentityRecord& out) override {
+    if (load == IdentityLoad::Valid) out = stored;
+    return load;
+  }
+  bool writeIdentity(const IdentityRecord& record) override {
+    if (failWrite) return false;
+    stored = record;
+    load = IdentityLoad::Valid;
+    ++writes;
+    return true;
+  }
+};
+
+struct SeqEntropy : IRandom {
+  uint32_t v = 0x10203040U;
+  uint32_t next() override { return v += 0x01020304U; }
+};
+
+void s10_hatch_command_lifecycle_and_same_boot_born_at_backfill() {
+  Rig rig(false, true);
+  FakeIdentityStore idStore;
+  SeqEntropy rng;
+  IdentityService identity;
+  identity.onBoot(1, IdentityLoad::Missing, nullptr, false);
+  TEST_ASSERT_EQUAL_UINT8(uint8_t(IdentityState::Egg), uint8_t(identity.state()));
+  rig.boot(1000);
+  rig.adapter.attachIdentity(&identity, &idStore, &rng);
+
+  // 1. In Egg: Lifecycle V1 encodes state=0 (Egg), stage=0 (Egg), clock=0 (Unknown).
+  uint8_t lc[LifecycleCodec::kSize] = {};
+  rig.adapter.encodeLifecycle(lc);
+  TEST_ASSERT_EQUAL_UINT8(1, lc[0]);
+  TEST_ASSERT_EQUAL_UINT8(8, lc[1]);
+  TEST_ASSERT_EQUAL_UINT8(0, lc[2]);  // Egg
+  TEST_ASSERT_EQUAL_UINT8(0, lc[3]);  // Egg stage
+  TEST_ASSERT_EQUAL_UINT8(0, lc[4]);  // Unknown clock
+
+  // 2. Storage failure on Hatch returns kNotReady (7) and stays in Egg (commit-first).
+  idStore.failWrite = true;
+  uint32_t id = 0;
+  TEST_ASSERT_EQUAL_UINT8(7, rig.send("01 07 90 00 00 00 00 00", 2000, id));
+  TEST_ASSERT_EQUAL_UINT32(0x90, id);
+  TEST_ASSERT_EQUAL_UINT8(uint8_t(IdentityState::Egg), uint8_t(identity.state()));
+
+  // 3. Valid Hatch with unknown time succeeds, transitions to Ready/Newborn with unknown bornAt.
+  idStore.failWrite = false;
+  TEST_ASSERT_EQUAL_UINT8(0, rig.send("01 07 91 00 00 00 00 00", 5000, id));
+  TEST_ASSERT_EQUAL_UINT8(uint8_t(IdentityState::Ready), uint8_t(identity.state()));
+  TEST_ASSERT_EQUAL_UINT8(uint8_t(IdentityOrigin::HatchedViaApp), uint8_t(identity.record().origin));
+  TEST_ASSERT_EQUAL_INT64(0, identity.record().bornAtUtcMs);
+  TEST_ASSERT_EQUAL_UINT8(uint8_t(VisualVariant::GreetNuzzle), uint8_t(rig.core.takeVariant()));
+
+  rig.adapter.encodeLifecycle(lc);
+  TEST_ASSERT_EQUAL_UINT8(1, lc[2]);  // Ready
+  TEST_ASSERT_EQUAL_UINT8(1, lc[3]);  // Newborn
+  TEST_ASSERT_EQUAL_UINT8(0, lc[5]);  // bornAtQuality Unknown
+  TEST_ASSERT_EQUAL_UINT8(2, lc[6]);  // HatchedViaApp
+  TEST_ASSERT_EQUAL_UINT8(0, lc[7]);  // hasBornAt = false
+
+  // 4. Same-request retry returns cached kOk (0).
+  TEST_ASSERT_EQUAL_UINT8(0, rig.send("01 07 91 00 00 00 00 00", 5500, id));
+  TEST_ASSERT_EQUAL_UINT32(1, idStore.writes);
+
+  // 5. New Hatch request after birth returns kInvalidArgument (4).
+  TEST_ASSERT_EQUAL_UINT8(4, rig.send("01 07 92 00 00 00 00 00", 6000, id));
+
+  // 6. Same-boot TimeSync backfills bornAtUtcMs and persists to identityStore.
+  TEST_ASSERT_EQUAL_UINT8(
+      0, rig.send("01 05 93 00 00 00 01 00 00 f1 53 65 a4 01 00 00", 8000, id));
+  TEST_ASSERT_EQUAL_UINT32(2, idStore.writes);
+  TEST_ASSERT_TRUE(identity.record().bornAtUtcMs > 0);
+  TEST_ASSERT_EQUAL_UINT8(uint8_t(ClockQuality::Synced), uint8_t(identity.record().bornAtQuality));
+
+  rig.adapter.encodeLifecycle(lc);
+  TEST_ASSERT_EQUAL_UINT8(2, lc[4]);  // clockQuality Synced
+  TEST_ASSERT_EQUAL_UINT8(2, lc[5]);  // bornAtQuality Synced
+  TEST_ASSERT_EQUAL_UINT8(1, lc[7]);  // hasBornAt = true
+}
+
+void s10_egg_hatch_hold_requires_three_seconds_and_cancels_on_early_release() {
+  EggHatchHold hold;
+  auto out = hold.update(true, true, false, 1000);
+  TEST_ASSERT_TRUE(out.started);
+  TEST_ASSERT_TRUE(out.holding);
+  TEST_ASSERT_FALSE(out.triggered);
+
+  out = hold.update(true, true, false, 2000);
+  TEST_ASSERT_TRUE(out.stepChanged);
+  TEST_ASSERT_EQUAL_UINT8(1, out.step);
+
+  // Early release at 2.5s cancels:
+  out = hold.update(true, false, false, 3500);
+  TEST_ASSERT_TRUE(out.canceled);
+  TEST_ASSERT_FALSE(out.triggered);
+
+  // Full 3-second hold triggers once:
+  out = hold.update(true, true, false, 4000);
+  TEST_ASSERT_TRUE(out.started);
+  out = hold.update(true, true, false, 7000);
+  TEST_ASSERT_TRUE(out.triggered);
+  TEST_ASSERT_EQUAL_UINT8(3, out.step);
+
+  // Holding longer does not re-trigger:
+  out = hold.update(true, true, false, 8000);
+  TEST_ASSERT_FALSE(out.triggered);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(enhanced_conversation_signal_is_felt_once);
@@ -714,5 +834,7 @@ RUN_TEST(spontaneous_choice_can_be_petted);
   RUN_TEST(knowledge_command_argument_validation);
   RUN_TEST(enhanced_display_settings_command_and_validation);
   RUN_TEST(baseline_rejects_display_settings);
+  RUN_TEST(s10_hatch_command_lifecycle_and_same_boot_born_at_backfill);
+  RUN_TEST(s10_egg_hatch_hold_requires_three_seconds_and_cancels_on_early_release);
   return UNITY_END();
 }
