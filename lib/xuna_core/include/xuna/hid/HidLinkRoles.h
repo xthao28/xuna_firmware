@@ -14,6 +14,7 @@ class HidLinkRoles {
     bool used = false;
     uint16_t connId = kNoConnId;
     bool appAccess = false;
+    bool encrypted = false;
     bool hidHost = false;
     uint32_t connectedAt = 0;
   };
@@ -48,6 +49,7 @@ class HidLinkRoles {
     slot.used = true;
     slot.connId = id;
     slot.appAccess = false;
+    slot.encrypted = false;
     slot.hidHost = false;
     slot.connectedAt = now;
     return makeAction();
@@ -67,6 +69,18 @@ class HidLinkRoles {
       }
     }
     target->appAccess = true;
+    // If this link had tentatively claimed hidHost while another encrypted
+    // non-app link is present, hand hidHost over to the dedicated HID link.
+    if (target->hidHost) {
+      for (uint8_t i = 0; i < kMaxLinks; ++i) {
+        if (links_[i].used && links_[i].connId != id && links_[i].encrypted &&
+            !links_[i].appAccess) {
+          target->hidHost = false;
+          links_[i].hidHost = true;
+          break;
+        }
+      }
+    }
     Action a = makeAction();
     a.sessionBump = true;
     return a;
@@ -75,9 +89,23 @@ class HidLinkRoles {
   Action onEncrypted(uint16_t id, bool bonded) {
     Link* target = find(id);
     if (!target || !bonded) return makeAction();
+    target->encrypted = true;
     if (target->hidHost) return makeAction();
     for (uint8_t i = 0; i < kMaxLinks; ++i) {
       if (links_[i].used && links_[i].connId != id && links_[i].hidHost) {
+        // UDC-2: the App link also encrypts its channel. If this link is the
+        // App (and the other link is a dedicated HID host), keep both alive.
+        if (target->appAccess) {
+          return makeAction();
+        }
+        // If the other link is the App (which held hidHost only while alone)
+        // and this link is a dedicated non-app HID host, transfer hidHost to
+        // this link without disconnecting the App.
+        if (links_[i].appAccess) {
+          links_[i].hidHost = false;
+          target->hidHost = true;
+          return makeAction();
+        }
         const bool wasApp = target->appAccess;
         remove(id);
         Action a = makeAction();
@@ -95,7 +123,18 @@ class HidLinkRoles {
     Link* target = find(id);
     if (!target) return makeAction();
     const bool wasApp = target->appAccess;
+    const bool wasHid = target->hidHost;
     *target = Link{};
+    if (wasHid) {
+      // If an encrypted App link (e.g. iPhone) remains connected, let it
+      // resume the hidHost role now that the separate HID host left.
+      for (uint8_t i = 0; i < kMaxLinks; ++i) {
+        if (links_[i].used && links_[i].encrypted) {
+          links_[i].hidHost = true;
+          break;
+        }
+      }
+    }
     Action a = makeAction();
     a.sessionBump = wasApp;
     return a;

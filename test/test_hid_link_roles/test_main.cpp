@@ -140,6 +140,60 @@ void squatter_without_role_is_disconnected_at_30s_while_roled_links_stay() {
   TEST_ASSERT_TRUE(roles.appConnected());
 }
 
+void app_phone_and_dedicated_hid_host_both_encrypt_in_any_order_without_disconnect() {
+  // Order 1: Mac/PC HID host connects and encrypts first (link 1), then App
+  // phone connects, accesses custom service, and encrypts (link 2).
+  {
+    HidLinkRoles roles;
+    roles.onConnect(1, 100);
+    TEST_ASSERT_FALSE(roles.onEncrypted(1, true).disconnect);
+    TEST_ASSERT_EQUAL_UINT16(1, roles.hidConnId());
+
+    roles.onConnect(2, 200);
+    TEST_ASSERT_FALSE(roles.onAppAccess(2).disconnect);
+    const auto encApp = roles.onEncrypted(2, true);
+    TEST_ASSERT_FALSE(encApp.disconnect);
+    TEST_ASSERT_EQUAL_UINT16(2, roles.appConnId());
+    TEST_ASSERT_EQUAL_UINT16(1, roles.hidConnId());
+  }
+
+  // Order 2: App phone connects, accesses custom service, and encrypts first
+  // (link 1), then Mac/PC HID host connects and encrypts (link 2).
+  {
+    HidLinkRoles roles;
+    roles.onConnect(1, 100);
+    roles.onAppAccess(1);
+    roles.onEncrypted(1, true);
+    TEST_ASSERT_EQUAL_UINT16(1, roles.appConnId());
+    TEST_ASSERT_EQUAL_UINT16(1, roles.hidConnId());
+
+    roles.onConnect(2, 200);
+    const auto encHost = roles.onEncrypted(2, true);
+    TEST_ASSERT_FALSE(encHost.disconnect);
+    TEST_ASSERT_EQUAL_UINT16(1, roles.appConnId());
+    TEST_ASSERT_EQUAL_UINT16(2, roles.hidConnId());
+
+    // When Mac/PC disconnects, encrypted App link reclaims hidConnId (e.g. iPhone).
+    roles.onDisconnect(2);
+    TEST_ASSERT_EQUAL_UINT16(1, roles.appConnId());
+    TEST_ASSERT_EQUAL_UINT16(1, roles.hidConnId());
+  }
+
+  // Order 3: Reconnecting bonded App phone encrypts before its first GATT read
+  // while Mac/PC is not yet encrypted, then Mac/PC encrypts and App reads 0002.
+  {
+    HidLinkRoles roles;
+    roles.onConnect(1, 100);
+    roles.onConnect(2, 150);
+    roles.onEncrypted(1, true);  // link 1 encrypted first
+    roles.onAppAccess(1);        // link 1 is the App
+    const auto encHost = roles.onEncrypted(2, true);
+    TEST_ASSERT_FALSE(encHost.disconnect);
+    TEST_ASSERT_EQUAL_UINT16(1, roles.appConnId());
+    TEST_ASSERT_EQUAL_UINT16(2, roles.hidConnId());
+  }
+}
+
 void setUp() {}
 void tearDown() {}
 
@@ -151,6 +205,7 @@ int main() {
   RUN_TEST(single_link_can_be_both_app_and_hid_host_for_iphone);
   RUN_TEST(app_disconnect_bumps_session_while_host_disconnect_does_not);
   RUN_TEST(squatter_without_role_is_disconnected_at_30s_while_roled_links_stay);
+  RUN_TEST(app_phone_and_dedicated_hid_host_both_encrypt_in_any_order_without_disconnect);
   return UNITY_END();
 }
 

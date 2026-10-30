@@ -433,7 +433,7 @@ class HidManager : public IHidControl {
       if (fr.consumed) ui.consumed = true;
       if (fr.outcome == hid::ForgetAllConfirm::Outcome::Confirmed) {
         const uint16_t hConn = hidConnId();
-        if (hConn != hid::HidLinkRoles::kNoConnId && server_) {
+        if (hConn != hid::HidLinkRoles::kNoConnId && hConn != appConnId() && server_) {
           server_->disconnect(hConn);
         }
         forgetAllBonds();
@@ -860,8 +860,13 @@ class HidManager : public IHidControl {
         portENTER_CRITICAL(&mux_);
         rememberPeerLocked(ge.connId, ge.bda);
         portEXIT_CRITICAL(&mux_);
-        if (slots_.findByAddress(ge.bda) >= 0) {
+        const int existingSlot = slots_.findByAddress(ge.bda);
+        if (existingSlot >= 0) {
           slots_.upsertAddress(ge.bda, false, currentDay_);
+          if (slots_.entry(uint8_t(existingSlot)).isAppPhone &&
+              !appConnected()) {
+            onAppAccessFromCallback(ge.connId, session, appConn, central);
+          }
         }
       } else if (ge.type == GattsEvent::Type::AppAccess) {
         if (onAppAccessFromCallback(ge.connId, session, appConn, central)) {

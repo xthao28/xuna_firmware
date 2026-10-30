@@ -102,6 +102,17 @@ class BleManager {
 #endif
     }
   } serverCallbacks_{*this};
+#if defined(XUNA_HID) && XUNA_HID
+  class ReadCallbacks: public BLECharacteristicCallbacks {
+    BleManager& owner_;
+   public:
+    explicit ReadCallbacks(BleManager& o):owner_(o){}
+    void onRead(BLECharacteristic*,esp_ble_gatts_cb_param_t* param) override {
+      owner_.hid_.onAppAccessFromCallback(param?param->read.conn_id:0xffff,
+                                          owner_.session_,owner_.connected_,owner_.central_);
+    }
+  } readCallbacks_{*this};
+#endif
   class WriteCallbacks: public BLECharacteristicCallbacks {
     BleManager& owner_;
    public:
@@ -254,6 +265,9 @@ class BleManager {
     b[5]|=0x38;
 #endif
     caps->setValue(b,sizeof(b));
+#if defined(XUNA_HID) && XUNA_HID
+    caps->setCallbacks(&readCallbacks_);
+#endif
     auto* command=service->createCharacteristic("7a6e0003-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_WRITE);command->setCallbacks(&writeCallbacks_);
     status_=service->createCharacteristic("7a6e0004-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ|BLECharacteristic::PROPERTY_NOTIFY);
     auto* statusCccd=new BLE2902();
