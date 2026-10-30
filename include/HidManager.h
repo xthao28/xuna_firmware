@@ -24,6 +24,9 @@
 #include <xuna/hid/PairingWindow.h>
 #include <xuna/hid/RemoteMode.h>
 #include <xuna/protocol/V1LifeCoreAdapter.h>
+#if defined(XUNA_AMS) && XUNA_AMS
+#include "AmsGattClient.h"
+#endif
 
 namespace xuna {
 
@@ -128,11 +131,17 @@ class HidManager : public IHidControl {
     BLEAdvertisementData scanResp;
     scanResp.setName("XUNA");
     adv->setScanResponseData(scanResp);
+#if defined(XUNA_AMS) && XUNA_AMS
+    if (!ams_.begin()) return false;
+#endif
     return true;
   }
 
   // IHidControl implementation (UDC-2 opcodes 12 and 13).
   bool canSendConsumerKey() const override {
+#if defined(XUNA_AMS) && XUNA_AMS
+    if (ams_.ready()) return true;
+#endif
     return hidConnected() && input_ != nullptr;
   }
 
@@ -242,7 +251,14 @@ class HidManager : public IHidControl {
                     std::atomic<bool>& appConn, std::atomic<uint16_t>& central) {
     hid::HidLinkRoles::Action r;
     bool adv = false;
+#if defined(XUNA_AMS) && XUNA_AMS
+    esp_bd_addr_t discBda = {};
+    bool hadBda = false;
+#endif
     portENTER_CRITICAL(&mux_);
+#if defined(XUNA_AMS) && XUNA_AMS
+    hadBda = bdaForConnIdLocked(connId, discBda);
+#endif
     r = roles_.onDisconnect(connId);
     forgetPeerLocked(connId);
     appConn.store(roles_.appConnected());
@@ -251,6 +267,9 @@ class HidManager : public IHidControl {
     adv = roles_.shouldAdvertise();
     portEXIT_CRITICAL(&mux_);
 
+#if defined(XUNA_AMS) && XUNA_AMS
+    if (hadBda) ams_.onPeerDisconnected(discBda);
+#endif
     if (adv) BLEDevice::startAdvertising();
   }
 
@@ -331,6 +350,11 @@ class HidManager : public IHidControl {
   }
 
   bool sendKey(hid::ConsumerKey key, uint32_t nowMs) {
+#if defined(XUNA_AMS) && XUNA_AMS
+    if (ams_.ready() && ams_.sendConsumerKey(key)) {
+      return true;
+    }
+#endif
     const uint8_t report = hid::pressReport(key);
     if (!report || !input_) return false;
     const uint16_t connId = hidConnId();
@@ -369,6 +393,11 @@ class HidManager : public IHidControl {
 
     UiAction ui;
     drainQueues(nowMs, ui, session, appConn, central);
+#if defined(XUNA_AMS) && XUNA_AMS
+    const bool amsTrackChanged = ams_.update(nowMs);
+#else
+    const bool amsTrackChanged = false;
+#endif
 
     if (pairingWindowPromptPending_) {
       pairingWindowPromptPending_ = false;
@@ -463,7 +492,12 @@ class HidManager : public IHidControl {
     remoteButtons.happyHold = passButtons && happyHold;
     remoteButtons.idleHold = passButtons && idleHold;
     remoteButtons.bothHold = passButtons && bothHold;
-    const auto rr = remote_.update(remoteButtons, hidConnected(), nowMs, inEgg);
+    const bool hostReady = hidConnected()
+#if defined(XUNA_AMS) && XUNA_AMS
+                           || ams_.ready()
+#endif
+        ;
+    const auto rr = remote_.update(remoteButtons, hostReady, nowMs, inEgg);
     const unsigned slotNum = unsigned(
         connectedHidSlot() < hid::HidHostsCodec::kMaxSlots
             ? connectedHidSlot() + 1u
@@ -471,16 +505,16 @@ class HidManager : public IHidControl {
     if (rr.enter) {
       ui.wake = true;
       ui.sparkle = true;
-      char buf[48];
-      std::snprintf(buf, sizeof(buf), "Remote > máy %u", slotNum);
+      char buf[96];
+      formatRemoteBubbleText(slotNum, buf, sizeof(buf));
       setSpeech(ui, buf, nowMs);
       Serial.printf("hid remote=on slot=%u\n", slotNum);
     }
     if (rr.key != hid::ConsumerKey::None) {
       const bool sent = sendKey(rr.key, nowMs);
       ui.sparkle = true;
-      char buf[48];
-      std::snprintf(buf, sizeof(buf), "Remote > máy %u", slotNum);
+      char buf[96];
+      formatRemoteBubbleText(slotNum, buf, sizeof(buf));
       setSpeech(ui, buf, nowMs);
       Serial.printf("hid remote_key=0x%02x sent=%u\n",
                     unsigned(static_cast<uint8_t>(rr.key)), sent ? 1u : 0u);
@@ -497,6 +531,11 @@ class HidManager : public IHidControl {
     }
     if (rr.advanceScene) ui.advanceScene = true;
     if (rr.consumed) ui.consumed = true;
+    if (amsTrackChanged && remote_.active() && !ui.showSpeech && !ui.clearSpeech) {
+      char buf[96];
+      formatRemoteBubbleText(slotNum, buf, sizeof(buf));
+      setSpeech(ui, buf, nowMs);
+    }
 
     // 5. Keep the prompt / Remote bubble alive while active so SpeechBubble's
     // 5-8 s page timer does not hide a 30 s pairing prompt or 60 s Remote session.
@@ -509,8 +548,8 @@ class HidManager : public IHidControl {
       } else if (forgetAllConfirm_.pending()) {
         setSpeech(ui, "Xóa hết máy đã ghép? GPIO0 đồng ý · GPIO14 hủy", nowMs);
       } else if (remote_.active()) {
-        char buf[48];
-        std::snprintf(buf, sizeof(buf), "Remote > máy %u", slotNum);
+        char buf[96];
+        formatRemoteBubbleText(slotNum, buf, sizeof(buf));
         setSpeech(ui, buf, nowMs);
       }
     }
@@ -845,6 +884,16 @@ class HidManager : public IHidControl {
                   lo);
   }
 
+  void formatRemoteBubbleText(unsigned slotNum, char* out, size_t cap) const {
+#if defined(XUNA_AMS) && XUNA_AMS
+    if (ams_.ready()) {
+      ams_.model().formatRemoteBubble(slotNum, out, cap);
+      return;
+    }
+#endif
+    std::snprintf(out, cap, "Remote > máy %u", slotNum);
+  }
+
   void setSpeech(UiAction& ui, const char* text, uint32_t nowMs) {
     std::snprintf(ui.speech, sizeof(ui.speech), "%s", text);
     ui.showSpeech = true;
@@ -867,6 +916,9 @@ class HidManager : public IHidControl {
               !appConnected()) {
             onAppAccessFromCallback(ge.connId, session, appConn, central);
           }
+#if defined(XUNA_AMS) && XUNA_AMS
+          ams_.onPeerEncrypted(ge.bda);
+#endif
         }
       } else if (ge.type == GattsEvent::Type::AppAccess) {
         if (onAppAccessFromCallback(ge.connId, session, appConn, central)) {
@@ -955,6 +1007,9 @@ class HidManager : public IHidControl {
           slots_.upsertAddress(ev.bda, isApp, currentDay_);
           saveSlotsToNvs();
           pairingWindow_.onBondSuccess();
+#if defined(XUNA_AMS) && XUNA_AMS
+          ams_.onPeerEncrypted(ev.bda);
+#endif
         }
         if (connId != hid::HidLinkRoles::kNoConnId) {
           applyEncryptedRole(connId, ev.success);
@@ -1038,6 +1093,14 @@ class HidManager : public IHidControl {
       const bool sent = sendKey(hid::ConsumerKey::Stop, nowMs);
       setSpeech(ui, "Đã dừng", nowMs);
       Serial.printf("hid stop sent=%u\n", sent ? 1u : 0u);
+#if defined(XUNA_AMS) && XUNA_AMS
+    } else if (std::strcmp(line, "ams status") == 0) {
+      Serial.printf("ams ready=%u mask=0x%04x playing=%u title=\"%s\" artist=\"%s\"\n",
+                    ams_.ready() ? 1u : 0u,
+                    unsigned(ams_.model().supportedCommandsMask()),
+                    ams_.model().playing() ? 1u : 0u,
+                    ams_.model().title(), ams_.model().artist());
+#endif
     }
   }
 
@@ -1063,6 +1126,9 @@ class HidManager : public IHidControl {
   hid::ForgetAllConfirm forgetAllConfirm_;
   hid::HidSlotTable slots_;
   hid::RemoteMode remote_;
+#if defined(XUNA_AMS) && XUNA_AMS
+  AmsGattClient ams_;
+#endif
 
   bool inEgg_ = false;
   bool qrCardOpen_ = false;

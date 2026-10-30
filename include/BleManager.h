@@ -256,6 +256,7 @@ class BleManager {
     // byte 3 bit 7: display brightness & screen sleep settings (opcode 11, Power Phase 2).
     // byte 5 bit 2: Routine V1 projection (7a6e0014, routine learning).
     // byte 5 bit 3: BLE HID Consumer Control (UDC-1); bit 4: opcodes 12/13 + 7a6e0015; bit 5: authenticated channel (UDC-2).
+    // byte 5 bit 7: experimental AMS client build (UDC-6, XUNA_AMS).
 #ifdef XUNA_NET
     uint8_t b[8]={1,8,0xff,0xff,0xff,0x07,0x60,0x09};
 #else
@@ -263,6 +264,9 @@ class BleManager {
 #endif
 #if defined(XUNA_HID) && XUNA_HID
     b[5]|=0x38;
+#endif
+#if defined(XUNA_AMS) && XUNA_AMS
+    b[5]|=0x80;
 #endif
     caps->setValue(b,sizeof(b));
 #if defined(XUNA_HID) && XUNA_HID
