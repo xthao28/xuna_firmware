@@ -228,6 +228,9 @@ void loop() {
 #ifdef XUNA_E14
   e14.loopGap(gap);
 #endif
+#if defined(XUNA_HID) && XUNA_HID
+  ble.hid().recordLoopGap(gap);
+#endif
   const uint32_t now = millis();
   adapter.tick(now);
   persistReady = lifeReady && identity.state() == xuna::IdentityState::Ready;
@@ -299,6 +302,29 @@ void loop() {
     display.closeCard();consumed=true;localBehavior.activity(now);pacer.touch(now);
     Serial.println("button: card closed");
   }
+#if defined(XUNA_HID) && XUNA_HID
+  if(bleReady){
+    const bool inEgg=identity.state()==xuna::IdentityState::Egg;
+    const auto hidUi=ble.updateHid(inEgg,events.happy,events.idle,events.happyHold,
+                                   events.idleHold,events.bothHold,consumed,now);
+    if(hidUi.wake&&displayReady&&display.screenSleeping())display.wake(now,animation.state());
+    if(hidUi.closeCard&&displayReady&&display.cardOpen())display.closeCard();
+    if(hidUi.clearSpeech&&displayReady)display.clearSpeech();
+    if(hidUi.showSpeech&&displayReady)display.showSpeech(hidUi.speech,now);
+    if(hidUi.sparkle&&displayReady)display.showEffect(xuna::EffectKind::Sparkle,now);
+    if(hidUi.advanceScene&&readyIdentity){
+      sceneMode=xuna::nextSceneMode(sceneMode);
+      const bool saved=scenePreference.save(sceneMode);
+      Serial.printf("button GPIO14: hold scene_mode=%s saved=%u\n",sceneName(sceneMode),saved?1u:0u);
+      if(displayReady)display.showEffect(xuna::EffectKind::Sparkle,now);
+    }
+    if(hidUi.consumed){
+      consumed=true;
+      localBehavior.activity(now);
+      pacer.touch(now);
+    }
+  }
+#endif
   if(lifeReady&&!consumed){
     // A heart / puff above XUNA shows that the reaction taught it.
     if(events.happy&&adapter.localGreeting(now)){
@@ -389,17 +415,24 @@ void loop() {
   animation.setReactionMs(style.reactionMs);
   animation.update(now);
   if(displayReady){
+#if defined(XUNA_HID) && XUNA_HID
+    const bool overlay=display.overlayOpen(now)||ble.hid().overlayKeepAlive();
+#else
     const bool overlay=display.overlayOpen(now);
+#endif
     const bool actionBusy=display.overlayOrActionBusy(now);
     display.setScreenPower(pacer.screenState(now,animation.state(),overlay),now,animation.state());
     display.setFramePeriod(pacer.framePeriodMs(now,animation.state(),actionBusy,style.framePeriodMs),now);
     display.setBackdrop(xuna::backdropFor(sceneMode,core.clock().dayPart(core.mono64())));
-#ifdef XUNA_E14
+#if defined(XUNA_E14) || (defined(XUNA_HID) && XUNA_HID)
     const uint32_t drawsBefore=display.draws(),drawStarted=micros();
 #endif
     display.update(now,animation.state());
 #ifdef XUNA_E14
     if(display.draws()!=drawsBefore)e14.render(micros()-drawStarted);
+#endif
+#if defined(XUNA_HID) && XUNA_HID
+    if(display.draws()!=drawsBefore)ble.hid().recordRender(micros()-drawStarted);
 #endif
   }
   if (bleReady) ble.stateChanged(animation.state(), now);
@@ -409,11 +442,19 @@ void loop() {
                   unsigned(uxTaskGetStackHighWaterMark(nullptr)));
     if(!saved)Serial.println("ERROR: life snapshot save failed");
   }
+#if defined(XUNA_HID) && XUNA_HID
+  const uint32_t loopPeriodMs = pacer.loopPeriodMs(
+      now, animation.state(),
+      (displayReady && display.visualBusy(now, animation.state())) || ble.hid().releasePending(),
+      input.anyRawPressed(),
+      (displayReady && display.overlayOpen(now)) || ble.hid().overlayKeepAlive());
+#else
   const uint32_t loopPeriodMs = pacer.loopPeriodMs(
       now, animation.state(),
       displayReady && display.visualBusy(now, animation.state()),
       input.anyRawPressed(),
       displayReady && display.overlayOpen(now));
+#endif
   if (uint32_t(now - diagnosticsAt) >= xuna::kDiagnosticsMs) {
     Serial.printf("scene=animated state=%s loop_gap_max_us=%u draws=%u draw_max_us=%u scene_max_us=%u\n",
                   (animation.state() == xuna::PetState::Idle ? "idle" : (animation.state() == xuna::PetState::Happy ? "happy" : (animation.state() == xuna::PetState::Sleep ? "sleep" : "curious"))), maxLoopGapUs, display.draws(), display.maxDrawUs(), display.maxSceneUs());

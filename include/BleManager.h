@@ -13,6 +13,9 @@
 #ifdef XUNA_NET
 #include <xuna/net/NetConfig.h>
 #endif
+#if defined(XUNA_HID) && XUNA_HID
+#include "HidManager.h"
+#endif
 namespace xuna {
 class BleManager {
   static constexpr const char* kService="7a6e0001-8c44-4db6-9f61-2b7d5300a101";
@@ -63,11 +66,18 @@ class BleManager {
   uint8_t lastLifecycle_[LifecycleCodec::kSize]={};
   uint8_t lastRoutine_[RoutineCodec::kSize]={};
   std::atomic<uint16_t> central_{0xffff};
+#if defined(XUNA_HID) && XUNA_HID
+  HidManager hid_;
+#endif
   class ServerCallbacks: public BLEServerCallbacks {
     BleManager& owner_;
    public:
     explicit ServerCallbacks(BleManager& o):owner_(o){}
     void onConnect(BLEServer* server,esp_ble_gatts_cb_param_t* param) override {
+#if defined(XUNA_HID) && XUNA_HID
+      owner_.hid_.onConnect(server,param->connect.conn_id,param->connect.remote_bda,millis(),
+                            owner_.session_,owner_.connected_,owner_.central_);
+#else
       if(owner_.connected_){server->disconnect(param->connect.conn_id);return;}
       if(param->connect.conn_id<=8)
         esp_ble_tx_power_set(static_cast<esp_ble_power_type_t>(ESP_BLE_PWR_TYPE_CONN_HDL0+param->connect.conn_id),
@@ -76,17 +86,28 @@ class BleManager {
       // latency and 4 s timeout instead of the central's 7.5–15 ms default.
       server->updateConnParams(param->connect.remote_bda,0x10,0x20,0,400);
       owner_.central_=param->connect.conn_id;++owner_.session_;owner_.connected_=true;
+#endif
     }
     void onDisconnect(BLEServer*,esp_ble_gatts_cb_param_t* param) override {
+#if defined(XUNA_HID) && XUNA_HID
+      owner_.hid_.onDisconnect(param->disconnect.conn_id,owner_.session_,owner_.connected_,owner_.central_);
+#else
       if(owner_.central_!=param->disconnect.conn_id)return;
       owner_.central_=0xffff;owner_.connected_=false;++owner_.session_;
+#endif
     }
   } serverCallbacks_{*this};
   class WriteCallbacks: public BLECharacteristicCallbacks {
     BleManager& owner_;
    public:
     explicit WriteCallbacks(BleManager& o):owner_(o){}
+#if defined(XUNA_HID) && XUNA_HID
+    void onWrite(BLECharacteristic* characteristic,esp_ble_gatts_cb_param_t* param) override {
+      if(!owner_.hid_.onAppAccessFromCallback(param?param->write.conn_id:0xffff,
+                                              owner_.session_,owner_.connected_,owner_.central_))return;
+#else
     void onWrite(BLECharacteristic* characteristic) override {
+#endif
       const auto value=characteristic->getValue();
       Packet p={};p.size=value.size();p.session=owner_.session_.load();
       for(size_t i=0;i<value.size()&&i<sizeof(p.bytes);++i)p.bytes[i]=value[i];
@@ -103,7 +124,13 @@ class BleManager {
     BleManager& owner_;
    public:
     explicit ProofCallbacks(BleManager& o):owner_(o){}
+#if defined(XUNA_HID) && XUNA_HID
+    void onWrite(BLECharacteristic* characteristic,esp_ble_gatts_cb_param_t* param) override {
+      if(!owner_.hid_.onAppAccessFromCallback(param?param->write.conn_id:0xffff,
+                                              owner_.session_,owner_.connected_,owner_.central_))return;
+#else
     void onWrite(BLECharacteristic* characteristic) override {
+#endif
       const auto value=characteristic->getValue();
       ProofPacket p={};p.size=value.size();p.session=owner_.session_.load();
       for(size_t i=0;i<value.size()&&i<sizeof(p.bytes);++i)p.bytes[i]=value[i];
@@ -114,7 +141,13 @@ class BleManager {
     BleManager& owner_;
    public:
     explicit SpeechCallbacks(BleManager& o):owner_(o){}
+#if defined(XUNA_HID) && XUNA_HID
+    void onWrite(BLECharacteristic* characteristic,esp_ble_gatts_cb_param_t* param) override {
+      if(!owner_.hid_.onAppAccessFromCallback(param?param->write.conn_id:0xffff,
+                                              owner_.session_,owner_.connected_,owner_.central_))return;
+#else
     void onWrite(BLECharacteristic* characteristic) override {
+#endif
       const auto value=characteristic->getValue();
       SpeechPacket p={};p.size=value.size();p.session=owner_.session_.load();
       if(p.size>sizeof(p.bytes))p.size=sizeof(p.bytes)+1; // too long: the assembler rejects it
@@ -127,7 +160,13 @@ class BleManager {
     BleManager& owner_;
    public:
     explicit NetCallbacks(BleManager& o):owner_(o){}
+#if defined(XUNA_HID) && XUNA_HID
+    void onWrite(BLECharacteristic* characteristic,esp_ble_gatts_cb_param_t* param) override {
+      if(!owner_.hid_.onAppAccessFromCallback(param?param->write.conn_id:0xffff,
+                                              owner_.session_,owner_.connected_,owner_.central_))return;
+#else
     void onWrite(BLECharacteristic* characteristic) override {
+#endif
       NetPacket p={};
       {
         auto value=characteristic->getValue();
@@ -185,10 +224,14 @@ class BleManager {
     // byte 3 bit 7: display brightness & screen sleep settings (opcode 11, Power Phase 2).
     // byte 5 bit 2: Routine V1 projection (7a6e0014, routine learning).
 #ifdef XUNA_NET
-    uint8_t b[8]={1,8,0xff,0xff,0xff,0x07,0x60,0x09};caps->setValue(b,sizeof(b));
+    uint8_t b[8]={1,8,0xff,0xff,0xff,0x07,0x60,0x09};
 #else
-    uint8_t b[8]={1,8,0xff,0xbf,0xff,0x07,0x60,0x09};caps->setValue(b,sizeof(b));
+    uint8_t b[8]={1,8,0xff,0xbf,0xff,0x07,0x60,0x09};
 #endif
+#if defined(XUNA_HID) && XUNA_HID
+    b[5]|=0x08;
+#endif
+    caps->setValue(b,sizeof(b));
     auto* command=service->createCharacteristic("7a6e0003-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_WRITE);command->setCallbacks(&writeCallbacks_);
     status_=service->createCharacteristic("7a6e0004-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ|BLECharacteristic::PROPERTY_NOTIFY);status_->addDescriptor(new BLE2902());
     lifeStatus_=service->createCharacteristic("7a6e0005-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ);
@@ -213,12 +256,20 @@ class BleManager {
 #endif
     {uint8_t idle[DeviceProof::kResponseSize]={1,uint8_t(DeviceProof::kResponseSize)};proofChar_->setValue(idle,sizeof(idle));}
     publish(0,0,0,PetState::Idle,0);service->start();
+#if defined(XUNA_HID) && XUNA_HID
+    if(!hid_.begin(server,service,kService))return false;
+    auto* adv=BLEDevice::getAdvertising();
+    adv->setMinInterval(0xA0);adv->setMaxInterval(0xF4);
+    adv->setMinPreferred(0x10);adv->setMaxPreferred(0x20);
+    adv->start();return true;
+#else
     auto* adv=BLEDevice::getAdvertising();adv->addServiceUUID(kService);adv->setScanResponse(true);
     // Heat: advertise every 100–152.5 ms (0.625 ms units), not the library's
     // 20–40 ms; the app scans for up to 12 s, so it still finds XUNA quickly.
     adv->setMinInterval(0xA0);adv->setMaxInterval(0xF4);
     adv->setMinPreferred(0x10);adv->setMaxPreferred(0x20);
     adv->start();return true;
+#endif
   }
   // All life/learning decisions belong to the pure adapter; callbacks only queue bytes.
   bool update(V1LifeCoreAdapter& adapter,const IdentityRecord* identity,IDeviceSigner& signer,uint32_t now,bool ready) {
@@ -229,8 +280,13 @@ class BleManager {
       adapter.onSession();proof_.reset();publishProof(signer);seenSession_=session;
       if(connected_)traffic_=true;
     }
+#if defined(XUNA_HID) && XUNA_HID
+    if(!hid_.shouldAdvertise())advertising_=false;
+    else if(!advertising_){BLEDevice::startAdvertising();advertising_=true;}
+#else
     if(connected_)advertising_=false;
     else if(!advertising_){BLEDevice::startAdvertising();advertising_=true;}
+#endif
     Packet p;bool interacted=false,reply=false;
     uint32_t replyId=0;uint8_t replyResult=0;PetState replyState=PetState::Idle;
     if(xQueueReceive(queue_,&p,0)==pdTRUE&&p.session==session&&connected_){
@@ -328,6 +384,9 @@ class BleManager {
     }
     // Publish only after all read projections reflect the committed command.
     if(reply)publish(1,replyId,replyResult,replyState,now);
+#if defined(XUNA_HID) && XUNA_HID
+    if(reply)hid_.recordBleCmdResult(replyResult);
+#endif
 #ifdef XUNA_E14
     if(reply){
       const uint32_t us=micros()-p.atUs;
@@ -363,5 +422,14 @@ class BleManager {
   void stateChanged(PetState state,uint32_t now) {
     const auto s=static_cast<uint8_t>(state);if(s!=lastState_){lastState_=s;++sequence_;publish(2,0,0,state,now);}
   }
+#if defined(XUNA_HID) && XUNA_HID
+  HidManager& hid() {return hid_;}
+  const HidManager& hid() const {return hid_;}
+  HidManager::UiAction updateHid(bool inEgg,bool happy,bool idle,bool happyHold,bool idleHold,bool bothHold,
+                                 bool buttonsAlreadyConsumed,uint32_t now) {
+    return hid_.update(inEgg,happy,idle,happyHold,idleHold,bothHold,buttonsAlreadyConsumed,now,
+                       session_,connected_,central_);
+  }
+#endif
 };
 }
