@@ -68,6 +68,11 @@ class BleManager {
   std::atomic<uint16_t> central_{0xffff};
 #if defined(XUNA_HID) && XUNA_HID
   HidManager hid_;
+  BLECharacteristic* hidHosts_=nullptr;
+  uint8_t lastHidHosts_[hid::HidHostsCodec::kSize]={};
+  bool deferredPending_=false;
+  uint32_t deferredId_=0;
+  Packet deferredPacket_={};
 #endif
   class ServerCallbacks: public BLEServerCallbacks {
     BleManager& owner_;
@@ -188,8 +193,24 @@ class BleManager {
     uint8_t b[16];
     V1LifeCoreAdapter::encodeStatus(kind,id,result,static_cast<uint8_t>(state),sequence_,now,b);
     status_->setValue(b,sizeof(b));
+#if defined(XUNA_HID) && XUNA_HID
+    hid_.notifyApp(status_,b,sizeof(b));
+#else
     if(connected_)status_->notify();
+#endif
   }
+#if defined(XUNA_HID) && XUNA_HID
+  void syncHidHosts(uint32_t now) {
+    if(!hidHosts_)return;
+    uint8_t hh[hid::HidHostsCodec::kSize];
+    hid_.encodeHidHosts(now,hh);
+    if(std::memcmp(lastHidHosts_,hh,sizeof(hh))){
+      std::memcpy(lastHidHosts_,hh,sizeof(hh));
+      hidHosts_->setValue(hh,sizeof(hh));
+      hid_.notifyApp(hidHosts_,hh,sizeof(hh));
+    }
+  }
+#endif
  public:
   bool begin() {
     queue_=xQueueCreate(8,sizeof(Packet));proofQueue_=xQueueCreate(1,sizeof(ProofPacket));
@@ -206,12 +227,12 @@ class BleManager {
     BLEDevice::setPower(ESP_PWR_LVL_N0,ESP_BLE_PWR_TYPE_ADV);
     BLEDevice::setPower(ESP_PWR_LVL_N0,ESP_BLE_PWR_TYPE_SCAN);
     auto* server=BLEDevice::createServer();server->setCallbacks(&serverCallbacks_);
-    // Default createService budget is 15 handles; this service needs 28 (service,
-    // 13 characteristics × 2, status CCCD). Too few silently drops 000b/000c/0013.
+    // Default createService budget is 15 handles; this service needs extra handles
+    // for all characteristics and CCCDs (including 7a6e0015 + CCCD in UDC-2).
 #ifdef XUNA_NET
-    auto* service=server->createService(BLEUUID(kService),48);  // + 0011 (2) and 0012 (3)
+    auto* service=server->createService(BLEUUID(kService),56);
 #else
-    auto* service=server->createService(BLEUUID(kService),40);
+    auto* service=server->createService(BLEUUID(kService),48);
 #endif
     auto* caps=service->createCharacteristic("7a6e0002-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ);
     // byte 2 bit 6: Hatch command (opcode 7) + Lifecycle V1 projection (7a6e0013, S10).
@@ -223,17 +244,20 @@ class BleManager {
     // byte 3 bit 6: Wi-Fi setup 7a6e0011 + network projection 7a6e0012 (DC-2, XUNA_NET builds only).
     // byte 3 bit 7: display brightness & screen sleep settings (opcode 11, Power Phase 2).
     // byte 5 bit 2: Routine V1 projection (7a6e0014, routine learning).
+    // byte 5 bit 3: BLE HID Consumer Control (UDC-1); bit 4: opcodes 12/13 + 7a6e0015; bit 5: authenticated channel (UDC-2).
 #ifdef XUNA_NET
     uint8_t b[8]={1,8,0xff,0xff,0xff,0x07,0x60,0x09};
 #else
     uint8_t b[8]={1,8,0xff,0xbf,0xff,0x07,0x60,0x09};
 #endif
 #if defined(XUNA_HID) && XUNA_HID
-    b[5]|=0x08;
+    b[5]|=0x38;
 #endif
     caps->setValue(b,sizeof(b));
     auto* command=service->createCharacteristic("7a6e0003-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_WRITE);command->setCallbacks(&writeCallbacks_);
-    status_=service->createCharacteristic("7a6e0004-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ|BLECharacteristic::PROPERTY_NOTIFY);status_->addDescriptor(new BLE2902());
+    status_=service->createCharacteristic("7a6e0004-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ|BLECharacteristic::PROPERTY_NOTIFY);
+    auto* statusCccd=new BLE2902();
+    status_->addDescriptor(statusCccd);
     lifeStatus_=service->createCharacteristic("7a6e0005-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ);
     memories_[0]=service->createCharacteristic("7a6e0006-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ);
     memories_[1]=service->createCharacteristic("7a6e0007-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ);
@@ -251,13 +275,46 @@ class BleManager {
     auto* netConfig=service->createCharacteristic("7a6e0011-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_WRITE);
     netConfig->setCallbacks(&netCallbacks_);
     netStatus_=service->createCharacteristic("7a6e0012-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ|BLECharacteristic::PROPERTY_NOTIFY);
-    netStatus_->addDescriptor(new BLE2902());
+    auto* netCccd=new BLE2902();
+    netStatus_->addDescriptor(netCccd);
     {uint8_t initial[NetStatus::kSize];NetStatus().encode(initial);std::memcpy(lastNet_,initial,sizeof(initial));netStatus_->setValue(initial,sizeof(initial));}
+#endif
+#if defined(XUNA_HID) && XUNA_HID
+    hidHosts_=service->createCharacteristic("7a6e0015-8c44-4db6-9f61-2b7d5300a101",BLECharacteristic::PROPERTY_READ|BLECharacteristic::PROPERTY_NOTIFY);
+    auto* hidHostsCccd=new BLE2902();
+    hidHosts_->addDescriptor(hidHostsCccd);
+    // UDC-2 §5.1: require link encryption on all custom characteristics except 7a6e0002.
+    constexpr esp_gatt_perm_t kEncRead=ESP_GATT_PERM_READ_ENCRYPTED;
+    constexpr esp_gatt_perm_t kEncWrite=ESP_GATT_PERM_WRITE_ENCRYPTED;
+    constexpr esp_gatt_perm_t kEncRW=ESP_GATT_PERM_READ_ENCRYPTED|ESP_GATT_PERM_WRITE_ENCRYPTED;
+    command->setAccessPermissions(kEncWrite);
+    status_->setAccessPermissions(kEncRead);
+    statusCccd->setAccessPermissions(kEncRW);
+    lifeStatus_->setAccessPermissions(kEncRead);
+    memories_[0]->setAccessPermissions(kEncRead);
+    memories_[1]->setAccessPermissions(kEncRead);
+    explanation_->setAccessPermissions(kEncRead);
+    identity_->setAccessPermissions(kEncRead);
+    proofChar_->setAccessPermissions(kEncRW);
+    personality_->setAccessPermissions(kEncRead);
+    knowledge_->setAccessPermissions(kEncRead);
+    speech->setAccessPermissions(kEncWrite);
+    lifecycle_->setAccessPermissions(kEncRead);
+    routine_->setAccessPermissions(kEncRead);
+    hidHosts_->setAccessPermissions(kEncRead);
+    hidHostsCccd->setAccessPermissions(kEncRW);
+#ifdef XUNA_NET
+    netConfig->setAccessPermissions(kEncWrite);
+    netStatus_->setAccessPermissions(kEncRead);
+    netCccd->setAccessPermissions(kEncRW);
+#endif
 #endif
     {uint8_t idle[DeviceProof::kResponseSize]={1,uint8_t(DeviceProof::kResponseSize)};proofChar_->setValue(idle,sizeof(idle));}
     publish(0,0,0,PetState::Idle,0);service->start();
 #if defined(XUNA_HID) && XUNA_HID
     if(!hid_.begin(server,service,kService))return false;
+    hid_.encodeHidHosts(0,lastHidHosts_);
+    hidHosts_->setValue(lastHidHosts_,sizeof(lastHidHosts_));
     auto* adv=BLEDevice::getAdvertising();
     adv->setMinInterval(0xA0);adv->setMaxInterval(0xF4);
     adv->setMinPreferred(0x10);adv->setMaxPreferred(0x20);
@@ -278,6 +335,9 @@ class BleManager {
     const bool sessionChanged=session!=seenSession_;
     if(sessionChanged){
       adapter.onSession();proof_.reset();publishProof(signer);seenSession_=session;
+#if defined(XUNA_HID) && XUNA_HID
+      deferredPending_=false;
+#endif
       if(connected_)traffic_=true;
     }
 #if defined(XUNA_HID) && XUNA_HID
@@ -295,8 +355,17 @@ class BleManager {
       const uint8_t result=adapter.handle(p.bytes,p.size,now,ready,id);
       AnimationManager presentation;
       presentation.setIntent(adapter.visual(),0,now);
-      reply=true;replyId=id;replyResult=result;replyState=presentation.state();
+      replyState=presentation.state();
       interacted=adapter.last().actionAccepted;
+#if defined(XUNA_HID) && XUNA_HID
+      if(result==V1LifeCoreAdapter::kDeferred){
+        deferredPending_=true;deferredId_=id;deferredPacket_=p;
+      } else {
+        reply=true;replyId=id;replyResult=result;
+      }
+#else
+      reply=true;replyId=id;replyResult=result;
+#endif
       if(p.size>=2&&p.bytes[1]==3)
         Serial.printf("stack tag=feedback high_water_bytes=%u result=%u\n",
                       unsigned(uxTaskGetStackHighWaterMark(nullptr)),result);
@@ -309,6 +378,10 @@ class BleManager {
         Serial.printf("knowledge arg=%u slot=%u result=%u\n",unsigned(p.bytes[6]),unsigned(p.bytes[8]),result);
       if(p.size>=8&&p.bytes[1]==11)
         Serial.printf("display_cmd bright=%u sleep=%u result=%u\n",unsigned(p.bytes[6]),unsigned(p.bytes[7]),result);
+      if(p.size>=8&&p.bytes[1]==12)
+        Serial.printf("hid_consumer arg=%u src=%u result=%u\n",unsigned(p.bytes[6]),unsigned(p.bytes[7]),result);
+      if(p.size>=8&&p.bytes[1]==13)
+        Serial.printf("hid_hosts arg=%u slot=%u result=%u\n",unsigned(p.bytes[6]),unsigned(p.bytes[7]),result);
       if(p.size>=2&&p.bytes[1]==7)
         Serial.printf("hatch_cmd result=%u\n",result);
       if(p.size>=2&&p.bytes[1]==5){
@@ -319,6 +392,23 @@ class BleManager {
                       int(adapter.clock().tzOffsetMin()));
       }
     }
+#if defined(XUNA_HID) && XUNA_HID
+    {
+      uint32_t defId=0;uint8_t defRes=0;
+      if(hid_.takeDeferredResult(defId,defRes)){
+        if(deferredPending_&&deferredId_==defId&&deferredPacket_.session==session&&connected_){
+          adapter.rememberDeferred(deferredPacket_.bytes,deferredPacket_.size,defRes);
+          deferredPending_=false;
+          syncHidHosts(now);
+          AnimationManager presentation;
+          presentation.setIntent(adapter.visual(),0,now);
+          publish(1,defId,defRes,presentation.state(),now);
+          hid_.recordBleCmdResult(defRes);
+        }
+      }
+    }
+    syncHidHosts(now);
+#endif
     // Projections are read-only GATT attributes: skip re-encoding on every loop
     // pass when disconnected, and when connected only sync on session/command,
     // state/decision/generation change or 1-second activeSeconds tick.
@@ -416,7 +506,11 @@ class BleManager {
     uint8_t b[NetStatus::kSize];status.encode(b);
     if(!std::memcmp(lastNet_,b,sizeof(b)))return;
     std::memcpy(lastNet_,b,sizeof(b));netStatus_->setValue(b,sizeof(b));
+#if defined(XUNA_HID) && XUNA_HID
+    hid_.notifyApp(netStatus_,b,sizeof(b));
+#else
     if(connected_)netStatus_->notify();
+#endif
   }
 #endif
   void stateChanged(PetState state,uint32_t now) {
@@ -425,10 +519,11 @@ class BleManager {
 #if defined(XUNA_HID) && XUNA_HID
   HidManager& hid() {return hid_;}
   const HidManager& hid() const {return hid_;}
-  HidManager::UiAction updateHid(bool inEgg,bool happy,bool idle,bool happyHold,bool idleHold,bool bothHold,
+  HidManager::UiAction updateHid(bool inEgg,bool qrCardOpen,uint16_t currentDay,bool happy,bool idle,
+                                 bool happyHold,bool idleHold,bool bothHold,
                                  bool buttonsAlreadyConsumed,uint32_t now) {
-    return hid_.update(inEgg,happy,idle,happyHold,idleHold,bothHold,buttonsAlreadyConsumed,now,
-                       session_,connected_,central_);
+    return hid_.update(inEgg,qrCardOpen,currentDay,happy,idle,happyHold,idleHold,bothHold,
+                       buttonsAlreadyConsumed,now,session_,connected_,central_);
   }
 #endif
 };

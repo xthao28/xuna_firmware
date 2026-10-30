@@ -807,8 +807,131 @@ void s10_egg_hatch_hold_requires_three_seconds_and_cancels_on_early_release() {
   TEST_ASSERT_FALSE(out.triggered);
 }
 
+struct FakeHidControl : IHidControl {
+  bool ready = true;
+  uint8_t sendResult = V1LifeCoreAdapter::kOk;
+  uint8_t hostsResult = V1LifeCoreAdapter::kOk;
+  uint32_t sentCount = 0;
+  uint8_t lastUsageIndex = 0;
+  uint8_t lastSource = 0;
+  uint8_t lastHostsOp = 0;
+  uint8_t lastHostsSlot = 0;
+  uint32_t lastHostsRequestId = 0;
+
+  bool canSendConsumerKey() const override { return ready; }
+  uint8_t sendConsumerKey(uint8_t usageIndex, uint8_t source,
+                          uint32_t) override {
+    if (sendResult != V1LifeCoreAdapter::kOk) return sendResult;
+    ++sentCount;
+    lastUsageIndex = usageIndex;
+    lastSource = source;
+    return V1LifeCoreAdapter::kOk;
+  }
+  uint8_t handleHidHosts(uint8_t op, uint8_t slot, uint32_t requestId,
+                         uint32_t) override {
+    lastHostsOp = op;
+    lastHostsSlot = slot;
+    lastHostsRequestId = requestId;
+    return hostsResult;
+  }
+};
+
+void udc2_opcode12_and_opcode13_dispatch_rate_limit_and_never_mutate_life() {
+  Rig rig(false, true);
+  rig.core.seedPersonality(0x5eed1234U);
+  putS01Pet(rig.store);
+  rig.boot(1000);
+
+  FakeHidControl hidCtrl;
+  rig.adapter.attachHidControl(&hidCtrl);
+
+  // Capture full snapshot / life / personality state before any opcode 12 call
+  uint8_t lifeBefore[20];
+  uint8_t mem0Before[20];
+  rig.adapter.encodeLife(lifeBefore);
+  rig.adapter.encodeMemory(0, mem0Before);
+  const uint32_t feedbackBefore = rig.core.snapshot().counters.feedbackCount;
+  const uint32_t generationBefore = rig.core.snapshot().generation;
+  const uint32_t evidenceBefore = rig.core.personality().evidence();
+  const uint16_t energyBefore = rig.adapter.last().needs.energy;
+  const uint16_t stimulationBefore = rig.adapter.last().needs.stimulation;
+
+  uint32_t id = 0;
+
+  // 1. Valid opcode 12 (HidConsumer): arg=1 (PlayPause), source=1 (app button)
+  TEST_ASSERT_EQUAL_UINT8(0, rig.send("01 0c a0 00 00 00 01 01", 2000, id));
+  TEST_ASSERT_EQUAL_UINT32(0xa0, id);
+  TEST_ASSERT_EQUAL_UINT32(1, hidCtrl.sentCount);
+  TEST_ASSERT_EQUAL_UINT8(1, hidCtrl.lastUsageIndex);
+  TEST_ASSERT_EQUAL_UINT8(1, hidCtrl.lastSource);
+  const char* bubble = nullptr;
+  TEST_ASSERT_TRUE(rig.adapter.takeHidFeedback(bubble));
+  TEST_ASSERT_NOT_NULL(bubble);
+  TEST_ASSERT_FALSE(rig.adapter.takeHidFeedback(bubble));
+
+  // 2. Duplicate requestId returns cached kOk without re-sending key
+  TEST_ASSERT_EQUAL_UINT8(0, rig.send("01 0c a0 00 00 00 01 01", 2100, id));
+  TEST_ASSERT_EQUAL_UINT32(1, hidCtrl.sentCount);
+
+  // 3. Valid opcode 12 with source=2 (brain-approved)
+  TEST_ASSERT_EQUAL_UINT8(0, rig.send("01 0c a1 00 00 00 04 02", 2200, id));
+  TEST_ASSERT_EQUAL_UINT8(4, hidCtrl.lastUsageIndex);
+  TEST_ASSERT_EQUAL_UINT8(2, hidCtrl.lastSource);
+  TEST_ASSERT_TRUE(rig.adapter.takeHidFeedback(bubble));
+
+  // 4. Rate limit: 3rd and 4th within 1000 ms succeed; 5th returns kBusy (5)
+  TEST_ASSERT_EQUAL_UINT8(0, rig.send("01 0c a2 00 00 00 02 01", 2300, id));
+  TEST_ASSERT_EQUAL_UINT8(0, rig.send("01 0c a3 00 00 00 03 01", 2400, id));
+  TEST_ASSERT_EQUAL_UINT8(5, rig.send("01 0c a4 00 00 00 05 01", 2500, id));
+  TEST_ASSERT_EQUAL_UINT32(4, hidCtrl.sentCount);
+
+  // After 1000 ms window passes (t=3100), press succeeds again
+  TEST_ASSERT_EQUAL_UINT8(0, rig.send("01 0c a5 00 00 00 06 01", 3100, id));
+  TEST_ASSERT_EQUAL_UINT32(5, hidCtrl.sentCount);
+
+  // 5. Invalid key code (0 or 8) or source (0 or 3) -> kInvalidArgument (4)
+  TEST_ASSERT_EQUAL_UINT8(4, rig.send("01 0c a6 00 00 00 00 01", 3200, id));
+  TEST_ASSERT_EQUAL_UINT8(4, rig.send("01 0c a7 00 00 00 08 01", 3201, id));
+  TEST_ASSERT_EQUAL_UINT8(4, rig.send("01 0c a8 00 00 00 01 00", 3202, id));
+  TEST_ASSERT_EQUAL_UINT8(4, rig.send("01 0c a9 00 00 00 01 03", 3203, id));
+
+  // 6. When HID host is not connected, returns kNotReady (7)
+  hidCtrl.ready = false;
+  TEST_ASSERT_EQUAL_UINT8(7, rig.send("01 0c aa 00 00 00 01 01", 4500, id));
+  hidCtrl.ready = true;
+
+  // 7. Verify zero mutation of LifeCore, learner, personality, or snapshot generation!
+  uint8_t lifeAfter[20];
+  uint8_t mem0After[20];
+  rig.adapter.encodeLife(lifeAfter);
+  rig.adapter.encodeMemory(0, mem0After);
+  TEST_ASSERT_EQUAL_HEX8_ARRAY(lifeBefore, lifeAfter, 20);
+  TEST_ASSERT_EQUAL_HEX8_ARRAY(mem0Before, mem0After, 20);
+  TEST_ASSERT_EQUAL_UINT32(feedbackBefore, rig.core.snapshot().counters.feedbackCount);
+  TEST_ASSERT_EQUAL_UINT32(generationBefore, rig.core.snapshot().generation);
+  TEST_ASSERT_EQUAL_UINT32(evidenceBefore, rig.core.personality().evidence());
+  TEST_ASSERT_EQUAL_UINT16(energyBefore, rig.adapter.last().needs.energy);
+  TEST_ASSERT_EQUAL_UINT16(stimulationBefore, rig.adapter.last().needs.stimulation);
+
+  // 8. Opcode 13 (HidHosts): arg=1 (forget slot 2), arg=3 (open window), arg=2 (deferred)
+  TEST_ASSERT_EQUAL_UINT8(0, rig.send("01 0d b0 00 00 00 01 02", 5000, id));
+  TEST_ASSERT_EQUAL_UINT8(1, hidCtrl.lastHostsOp);
+  TEST_ASSERT_EQUAL_UINT8(2, hidCtrl.lastHostsSlot);
+
+  // Invalid arg=1 with slot=4 -> kInvalidArgument (4)
+  TEST_ASSERT_EQUAL_UINT8(4, rig.send("01 0d b1 00 00 00 01 04", 5001, id));
+  // Invalid arg=2 with non-zero byte 7 -> kInvalidArgument (4)
+  TEST_ASSERT_EQUAL_UINT8(4, rig.send("01 0d b2 00 00 00 02 01", 5002, id));
+
+  // Deferred result (255) for arg=2 is NOT cached until completed on device
+  hidCtrl.hostsResult = V1LifeCoreAdapter::kDeferred;
+  TEST_ASSERT_EQUAL_UINT8(V1LifeCoreAdapter::kDeferred,
+                          rig.send("01 0d b3 00 00 00 02 00", 5003, id));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
+  RUN_TEST(udc2_opcode12_and_opcode13_dispatch_rate_limit_and_never_mutate_life);
   RUN_TEST(enhanced_conversation_signal_is_felt_once);
   RUN_TEST(baseline_rejects_conversation_signal);
   RUN_TEST(enhanced_variant_preview_is_shown_only);

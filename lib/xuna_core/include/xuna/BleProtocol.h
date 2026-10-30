@@ -24,12 +24,17 @@ struct BleCommand {
 // Opcode 11 DisplaySettings (Power Phase 2, 8 bytes: arg 0..2 brightness
 // preset Low/Medium/High, source 0..1 screenSleep enabled, capability byte 3
 // bit 7) rides the `knowledge` / enhanced flag.
+// Opcode 12 HidConsumer (UDC-2, 8 bytes: arg 1..7 consumer usage index,
+// source 1 = app button, 2 = brain-approved) and Opcode 13 HidHosts (UDC-2,
+// 8 bytes: arg 1 forget slot 0..3 in source, arg 2 forget all, arg 3 open
+// 60 s pairing window) are parsed when `hid` is set.
 inline BleCommand parseCommand(const uint8_t* b,size_t n,
                                bool statedPreference=false,
                                bool timeSync=false,bool hatch=false,
                                bool variantPreview=false,
                                bool conversation=false,
-                               bool knowledge=false) {
+                               bool knowledge=false,
+                               bool hid=false) {
   BleCommand c; if(n>=6)c.id=LifeEngine::get32(b+2);
   if(n!=8&&n!=12&&((!timeSync&&!knowledge)||n!=16)){c.error=2;return c;}
   if(b[0]!=1){c.error=1;return c;}
@@ -42,7 +47,9 @@ inline BleCommand parseCommand(const uint8_t* b,size_t n,
   const bool control=conversation&&c.opcode==9;
   const bool know=knowledge&&c.opcode==10;
   const bool displaySettings=knowledge&&c.opcode==11;
-  if((c.opcode<1||c.opcode>4)&&!stated&&!sync&&!hatchCommand&&!talk&&!control&&!know&&!displaySettings){c.error=3;return c;}
+  const bool hidConsumer=hid&&c.opcode==12;
+  const bool hidHosts=hid&&c.opcode==13;
+  if((c.opcode<1||c.opcode>4)&&!stated&&!sync&&!hatchCommand&&!talk&&!control&&!know&&!displaySettings&&!hidConsumer&&!hidHosts){c.error=3;return c;}
   const size_t expected=(sync||know)?16:(c.opcode==3||stated?12:8);
   if(n!=expected){c.error=2;return c;}
   if(c.opcode==3)c.target=LifeEngine::get32(b+8);
@@ -70,6 +77,12 @@ inline BleCommand parseCommand(const uint8_t* b,size_t n,
     else if(c.arg==7&&(c.slot2>=5||c.slot2==c.slot||c.factKey==0))c.error=4;
   }
   if(displaySettings&&(c.arg>2||c.source>1))c.error=4;
+  if(hidConsumer&&(c.arg<1||c.arg>7||c.source<1||c.source>2))c.error=4;
+  if(hidHosts){
+    if(c.arg==1){if(c.source>3)c.error=4;}
+    else if(c.arg==2||c.arg==3){if(c.source!=0)c.error=4;}
+    else c.error=4;
+  }
   return c;
 }
 class CommandCache {

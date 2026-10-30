@@ -171,6 +171,9 @@ void setup() {
   const auto boot=xuna::BootSequence::run(storage,storageReady,snapshotCommit,core,identity,
                                           entropy,recovered,now);
   adapter.attachIdentity(&identity,&storage,&entropy);
+#if defined(XUNA_HID) && XUNA_HID
+  adapter.attachHidControl(&ble.hid());
+#endif
   const auto& report=boot.recovery;
   lifeReady=boot.lifeReady;
   persistReady=boot.persistReady();
@@ -288,6 +291,13 @@ void loop() {
       case 2: display.clearSpeech(); pacer.touch(now); break;
       default: break;
     }
+    const char* hidSaid=nullptr;
+    if(adapter.takeHidFeedback(hidSaid)){
+      if(display.screenSleeping())display.wake(now,animation.state());
+      display.showSpeech(hidSaid,now);
+      display.showEffect(xuna::EffectKind::Sparkle,now);
+      pacer.touch(now);
+    }
   }
   const auto events = input.update(now);
   // While the screen is asleep or a card is shown, a single button press only wakes/closes it.
@@ -305,7 +315,10 @@ void loop() {
 #if defined(XUNA_HID) && XUNA_HID
   if(bleReady){
     const bool inEgg=identity.state()==xuna::IdentityState::Egg;
-    const auto hidUi=ble.updateHid(inEgg,events.happy,events.idle,events.happyHold,
+    const bool qrCardOpen=displayReady&&display.cardOpen();
+    const uint16_t rawDay=core.clock().localDayIndex(core.mono64());
+    const uint16_t currentDay=rawDay>0?rawDay:0xFFFF;
+    const auto hidUi=ble.updateHid(inEgg,qrCardOpen,currentDay,events.happy,events.idle,events.happyHold,
                                    events.idleHold,events.bothHold,consumed,now);
     if(hidUi.wake&&displayReady&&display.screenSleeping())display.wake(now,animation.state());
     if(hidUi.closeCard&&displayReady&&display.cardOpen())display.closeCard();
@@ -388,6 +401,9 @@ void loop() {
         xuna::hexPrefix(readyIdentity->petId,4,shortId);
         shown=display.showPairing(uri,shortId,now);
       }
+#if defined(XUNA_HID) && XUNA_HID
+      if(shown&&bleReady)ble.hid().openPairingWindow(now);
+#endif
       Serial.printf("button both: hold pairing_card=%u\n",shown?1u:0u);
     }
     if(anyButton){localBehavior.activity(now);pacer.touch(now);}

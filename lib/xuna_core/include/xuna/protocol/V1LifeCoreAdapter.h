@@ -2,9 +2,12 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 
 #include <xuna/BleProtocol.h>
 #include <xuna/LifecycleCodec.h>
+#include <xuna/hid/ConsumerReport.h>
+#include <xuna/hid/HidRateLimiter.h>
 #include <xuna/identity/IdentityService.h>
 #include <xuna/learning/ExplanationCodec.h>
 #include <xuna/learning/LearnerVocabulary.h>
@@ -16,6 +19,15 @@
 #include <xuna/knowledge/KnowledgeProjection.h>
 
 namespace xuna {
+
+// Port for UDC-2 BLE opcodes 12 (HidConsumer) and 13 (HidHosts).
+class IHidControl {
+ public:
+  virtual ~IHidControl() {}
+  virtual bool canSendConsumerKey() const = 0;
+  virtual uint8_t sendConsumerKey(uint8_t usageIndex, uint8_t source, uint32_t now) = 0;
+  virtual uint8_t handleHidHosts(uint8_t subOp, uint8_t slot, uint32_t requestId, uint32_t now) = 0;
+};
 
 // S13 + S18 integration seam (owner decision 2026-10-16): BLE protocol v1 on
 // top of LifeCore + LifeSnapshot v2. It replaces the business logic in
@@ -46,6 +58,7 @@ class V1LifeCoreAdapter {
     kRequestConflict = 6,
     kNotReady = 7,
     kExpired = 8,
+    kDeferred = 255,
   };
   // Opcode 1 args 4–7: Track A variant preview (enhanced adapter only).
   static constexpr uint8_t kVariantPreviewBase = 4;
@@ -82,6 +95,9 @@ class V1LifeCoreAdapter {
     identityStore_ = store;
     entropy_ = entropy;
   }
+
+  // UDC-2: wires BLE HID consumer control and host management (opcodes 12/13).
+  void attachHidControl(IHidControl* hidControl) { hidControl_ = hidControl; }
 
   // S10 commit-first hatch (device GPIO14 3s hold or BLE opcode 7).
   uint8_t hatch(IdentityOrigin origin) {
@@ -120,15 +136,20 @@ class V1LifeCoreAdapter {
   uint8_t handle(const uint8_t* bytes, size_t size, uint32_t now, bool ready,
                  uint32_t& id) {
     const BleCommand c = parseCommand(bytes, size, enhancedLearning_, true, enhancedLearning_,
-                                        enhancedLearning_, enhancedLearning_, enhancedLearning_);
+                                      enhancedLearning_, enhancedLearning_, enhancedLearning_,
+                                      enhancedLearning_);
     id = c.id;
     uint8_t result = c.error;
     const int duplicate = size <= kMaxPacket ? cache_.find(bytes, size) : -1;
     if (duplicate >= 0) return static_cast<uint8_t>(duplicate);
     if (!result && !ready) result = kNotReady;
     if (!result) result = dispatch(c, now);
-    if (c.id) cache_.remember(bytes, size, result);
+    if (c.id && result != kDeferred) cache_.remember(bytes, size, result);
     return result;
+  }
+
+  void rememberDeferred(const uint8_t* bytes, size_t size, uint8_t result) {
+    if (size <= kMaxPacket) cache_.remember(bytes, size, result);
   }
 
   // GPIO14: explicit idle. Right after XUNA acted it is also a "shoo"
@@ -344,6 +365,15 @@ class V1LifeCoreAdapter {
     return true;
   }
 
+  // UDC-2: returns true once per accepted opcode 12 HidConsumer command to show
+  // the expression-only speech bubble on the board.
+  bool takeHidFeedback(const char*& text) {
+    if (!hidFeedbackPending_) return false;
+    hidFeedbackPending_ = false;
+    text = hidFeedback_;
+    return true;
+  }
+
  private:
   uint8_t dispatch(const BleCommand& c, uint32_t now) {
     switch (c.opcode) {
@@ -441,8 +471,36 @@ class V1LifeCoreAdapter {
         displayScreenSleep_ = c.source != 0;
         return kOk;
       }
+      case 12: {
+        // UDC-2 §5.2: Never a life event! Returns before any LifeCoreEvent is built.
+        if (!hidControl_ || !hidControl_->canSendConsumerKey()) return kNotReady;
+        if (!hidRateLimiter_.allow(now)) return kBusy;
+        const uint8_t res = hidControl_->sendConsumerKey(c.arg, c.source, now);
+        if (res == kOk) {
+          formatHidFeedback(c.arg, c.source);
+          hidFeedbackPending_ = true;
+        }
+        return res;
+      }
+      case 13: {
+        if (!hidControl_) return kNotReady;
+        return hidControl_->handleHidHosts(c.arg, c.source, c.id, now);
+      }
     }
     return kUnknownOpcode;
+  }
+
+  void formatHidFeedback(uint8_t usageIndex, uint8_t source) {
+    static const char* const kLabels[] = {
+        "",           "Play/Pause", "Next", "Previous",
+        "Volume +",   "Volume -",   "Mute", "Stop",
+    };
+    const char* label = (usageIndex >= 1 && usageIndex <= 7) ? kLabels[usageIndex] : "";
+    if (source == 2) {
+      std::snprintf(hidFeedback_, sizeof(hidFeedback_), "> %s (XUNA hỏi rồi)", label);
+    } else {
+      std::snprintf(hidFeedback_, sizeof(hidFeedback_), "> %s", label);
+    }
   }
 
   bool react(bool approved, uint32_t now) {
@@ -482,6 +540,10 @@ class V1LifeCoreAdapter {
   bool displaySettingsPending_ = false;
   uint8_t displayBrightness_ = 1;
   bool displayScreenSleep_ = true;
+  IHidControl* hidControl_ = nullptr;
+  hid::HidRateLimiter hidRateLimiter_;
+  bool hidFeedbackPending_ = false;
+  char hidFeedback_[48] = {};
   IdentityService* identity_ = nullptr;
   IBootStore* identityStore_ = nullptr;
   IRandom* entropy_ = nullptr;
