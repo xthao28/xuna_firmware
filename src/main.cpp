@@ -9,6 +9,7 @@
 #include <xuna/identity/IdentityService.h>
 #include <xuna/life/BootSequence.h>
 #include <xuna/personality/Expression.h>
+#include <xuna/social/SocialEcology.h>
 #include "NvsSnapshotStore.h"
 #include "DeviceKey.h"
 #include "ScenePreference.h"
@@ -47,6 +48,7 @@ xuna::SceneMode sceneMode = xuna::SceneMode::Auto;
 xuna::EggHatchHold eggHatchHold;
 xuna::RhythmTrickDecoder rhythmDecoder;
 xuna::TrickMasteryTracker trickTracker;
+xuna::SocialEncounterEngine socialEcology;
 struct HardwareEntropy : xuna::IRandom { uint32_t next() override { return esp_random(); } } entropy;
 #ifdef XUNA_E14
 xuna::E14Diagnostics e14;  // E14 gate metrics; XUNA_E14=1 also starts the network probe

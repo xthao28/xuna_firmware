@@ -2,6 +2,7 @@
 
 #include <xuna/hid/RemoteMode.h>
 #include <xuna/protocol/V1LifeCoreAdapter.h>
+#include <xuna/social/SocialEcology.h>
 #include <xuna/visual/SymbioticRoom.h>
 
 using namespace xuna::hid;
@@ -296,6 +297,56 @@ void sym3_epigenetic_palette_room_props_and_rhythm_tricks_work() {
   TEST_ASSERT_TRUE(tracker.stabilityDaysQ4(RhythmTrickId::SpinDance) > 16);
 }
 
+void sym4_social_beacon_encoding_and_proximity_encounter_engine_work() {
+  using namespace xuna;
+  const uint8_t myPet[16] = {0xA1, 0xB2, 0xC3, 0xD4, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12};
+  SocialBeaconPacket pkt;
+  pkt.shortPetId[0] = 0x11;
+  pkt.shortPetId[1] = 0x22;
+  pkt.shortPetId[2] = 0x33;
+  pkt.shortPetId[3] = 0x44;
+  pkt.dominantTrait = 2;  // Playfulness
+  pkt.tint = EpigeneticTint::GoldenAmber;
+  pkt.sharedTrick = RhythmTrickId::SpinDance;
+  pkt.moodCode = 1;
+
+  uint8_t wire[SocialBeaconPacket::kSize] = {};
+  pkt.encode(wire);
+
+  SocialBeaconPacket decoded;
+  TEST_ASSERT_TRUE(SocialBeaconPacket::decode(wire, sizeof(wire), decoded));
+  TEST_ASSERT_EQUAL_UINT8(0x11, decoded.shortPetId[0]);
+  TEST_ASSERT_EQUAL_UINT8(0x44, decoded.shortPetId[3]);
+  TEST_ASSERT_EQUAL_UINT8(2, decoded.dominantTrait);
+  TEST_ASSERT_EQUAL_UINT8(uint8_t(EpigeneticTint::GoldenAmber), uint8_t(decoded.tint));
+  TEST_ASSERT_EQUAL_UINT8(uint8_t(RhythmTrickId::SpinDance), uint8_t(decoded.sharedTrick));
+
+  SocialEncounterEngine engine;
+  SocialEncounterRecord rec;
+  // 1. Weak RSSI (-72 dBm < -65 dBm) is ignored.
+  TEST_ASSERT_FALSE(engine.onBeaconObserved(myPet, 0, wire, sizeof(wire), -72, 1000, rec));
+  // 2. Self beacon is ignored.
+  SocialBeaconPacket selfPkt = pkt;
+  selfPkt.shortPetId[0] = 0xA1;
+  selfPkt.shortPetId[1] = 0xB2;
+  selfPkt.shortPetId[2] = 0xC3;
+  selfPkt.shortPetId[3] = 0xD4;
+  uint8_t selfWire[8] = {};
+  selfPkt.encode(selfWire);
+  TEST_ASSERT_FALSE(engine.onBeaconObserved(myPet, 0, selfWire, sizeof(selfWire), -50, 1000, rec));
+
+  // 3. Valid nearby peer (-55 dBm) triggers HarmoniousSpark encounter.
+  TEST_ASSERT_TRUE(engine.onBeaconObserved(myPet, 0, wire, sizeof(wire), -55, 2000, rec));
+  TEST_ASSERT_EQUAL_UINT8(uint8_t(SocialGreetingKind::HarmoniousSpark), uint8_t(rec.greeting));
+  TEST_ASSERT_EQUAL_UINT8(uint8_t(RhythmTrickId::SpinDance), uint8_t(rec.sharedTrick));
+  TEST_ASSERT_EQUAL_UINT16(1, engine.totalEncounters());
+
+  // 4. Duplicate within 5-minute cooldown (300000 ms) is suppressed; after cooldown succeeds.
+  TEST_ASSERT_FALSE(engine.onBeaconObserved(myPet, 0, wire, sizeof(wire), -50, 2000 + 100000, rec));
+  TEST_ASSERT_TRUE(engine.onBeaconObserved(myPet, 0, wire, sizeof(wire), -50, 2000 + 300001, rec));
+  TEST_ASSERT_EQUAL_UINT16(2, engine.totalEncounters());
+}
+
 void setUp() {}
 void tearDown() {}
 
@@ -309,6 +360,7 @@ int main() {
   RUN_TEST(remote_workflows_layout_triggers_slots_1_and_2_and_opcode_13_arg_4);
   RUN_TEST(action_approval_confirm_handles_approve_reject_cancel_timeout_and_opcode_13);
   RUN_TEST(sym3_epigenetic_palette_room_props_and_rhythm_tricks_work);
+  RUN_TEST(sym4_social_beacon_encoding_and_proximity_encounter_engine_work);
   return UNITY_END();
 }
 
