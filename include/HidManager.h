@@ -34,7 +34,7 @@ namespace xuna {
 // Keeps all state-machine decisions in pure xuna::hid::* headers and copies
 // Bluedroid callback data through lock-free queues.
 class HidManager : public IHidControl {
- public:
+public:
   static constexpr uint32_t kDiagIntervalMs = 10000;
   static constexpr uint32_t kBubbleRefreshMs = 4000;
 
@@ -48,15 +48,17 @@ class HidManager : public IHidControl {
     bool consumed = false;
     bool remoteStop = false;
     uint8_t remoteWorkflowSlot = 0;
+    uint8_t approvalDecision = 0;
     char speech[96] = {};
   };
 
-  bool begin(BLEServer* server, BLEService* customService,
-             const char* customServiceUuid) {
+  bool begin(BLEServer *server, BLEService *customService,
+             const char *customServiceUuid) {
     server_ = server;
     gapQueue_ = xQueueCreate(8, sizeof(GapEvent));
     gattsQueue_ = xQueueCreate(16, sizeof(GattsEvent));
-    if (!gapQueue_ || !gattsQueue_) return false;
+    if (!gapQueue_ || !gattsQueue_)
+      return false;
 
     instancePtr() = this;
     BLEDevice::setCustomGapHandler(&HidManager::gapCallback);
@@ -71,42 +73,51 @@ class HidManager : public IHidControl {
     hid_->manufacturer()->setValue("XUNA");
     hid_->pnp(0x01, 0x02E5, 0x0001, 0x0100);
     hid_->hidInfo(0x00, 0x02);
-    hid_->reportMap(const_cast<uint8_t*>(hid::kConsumerReportMap),
+    hid_->reportMap(const_cast<uint8_t *>(hid::kConsumerReportMap),
                     sizeof(hid::kConsumerReportMap));
     input_ = hid_->inputReport(hid::kConsumerReportId);
 
-    if (auto* devInfo = hid_->deviceInfo()) {
+    if (auto *devInfo = hid_->deviceInfo()) {
       const uint16_t h = devInfo->getHandle();
-      if (h > serviceStartHandle_) serviceEndHandle_ = h;
+      if (h > serviceStartHandle_)
+        serviceEndHandle_ = h;
     }
-    if (auto* hidSvc = hid_->hidService()) {
+    if (auto *hidSvc = hid_->hidService()) {
       hidStartHandle_ = hidSvc->getHandle();
       hidEndHandle_ = uint16_t(hidStartHandle_ + 32);
     }
 
-    // HOGP §7.1: require link encryption on all HID characteristics/descriptors.
+    // HOGP §7.1: require link encryption on all HID
+    // characteristics/descriptors.
     constexpr esp_gatt_perm_t kEncPerm =
         ESP_GATT_PERM_READ_ENCRYPTED | ESP_GATT_PERM_WRITE_ENCRYPTED;
-    if (auto* hidSvc = hid_->hidService()) {
-      if (auto* c = hidSvc->getCharacteristic(BLEUUID(static_cast<uint16_t>(0x2a4a))))
+    if (auto *hidSvc = hid_->hidService()) {
+      if (auto *c =
+              hidSvc->getCharacteristic(BLEUUID(static_cast<uint16_t>(0x2a4a))))
         c->setAccessPermissions(kEncPerm);
-      if (auto* c = hidSvc->getCharacteristic(BLEUUID(static_cast<uint16_t>(0x2a4b))))
+      if (auto *c =
+              hidSvc->getCharacteristic(BLEUUID(static_cast<uint16_t>(0x2a4b))))
         c->setAccessPermissions(kEncPerm);
     }
-    if (auto* c = hid_->hidControl()) c->setAccessPermissions(kEncPerm);
-    if (auto* c = hid_->protocolMode()) c->setAccessPermissions(kEncPerm);
+    if (auto *c = hid_->hidControl())
+      c->setAccessPermissions(kEncPerm);
+    if (auto *c = hid_->protocolMode())
+      c->setAccessPermissions(kEncPerm);
     if (input_) {
       input_->setAccessPermissions(kEncPerm);
-      if (auto* d = input_->getDescriptorByUUID(BLEUUID(static_cast<uint16_t>(0x2902))))
+      if (auto *d = input_->getDescriptorByUUID(
+              BLEUUID(static_cast<uint16_t>(0x2902))))
         d->setAccessPermissions(kEncPerm);
-      if (auto* d = input_->getDescriptorByUUID(BLEUUID(static_cast<uint16_t>(0x2908))))
+      if (auto *d = input_->getDescriptorByUUID(
+              BLEUUID(static_cast<uint16_t>(0x2908))))
         d->setAccessPermissions(kEncPerm);
     }
 
     hid_->startServices();
 
-    // LE Secure Connections + MITM (Numeric Comparison via DisplayYesNo) + Bonding.
-    // Do NOT register BLESecurityCallbacks (avoids synchronous onConfirmPIN in BT task).
+    // LE Secure Connections + MITM (Numeric Comparison via DisplayYesNo) +
+    // Bonding. Do NOT register BLESecurityCallbacks (avoids synchronous
+    // onConfirmPIN in BT task).
     security_.setAuthenticationMode(ESP_LE_AUTH_REQ_SC_MITM_BOND);
     security_.setCapability(ESP_IO_CAP_IO);
     security_.setInitEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
@@ -122,9 +133,10 @@ class HidManager : public IHidControl {
     // Advertising payload must fit in 31 bytes:
     // flags (3) + 128-bit XUNA UUID (18) + 16-bit 0x1812 UUID (4) + appearance
     // 0x03C0 (4) = 29 B. Device name stays in scan response.
-    auto* adv = BLEDevice::getAdvertising();
+    auto *adv = BLEDevice::getAdvertising();
     BLEAdvertisementData advData;
-    advData.setFlags(ESP_BLE_ADV_FLAG_GEN_DISC | ESP_BLE_ADV_FLAG_BREDR_NOT_SPT);
+    advData.setFlags(ESP_BLE_ADV_FLAG_GEN_DISC |
+                     ESP_BLE_ADV_FLAG_BREDR_NOT_SPT);
     advData.setCompleteServices(BLEUUID(customServiceUuid));
     advData.setCompleteServices(BLEUUID(static_cast<uint16_t>(0x1812)));
     advData.setAppearance(GENERIC_HID);
@@ -134,7 +146,8 @@ class HidManager : public IHidControl {
     scanResp.setName("XUNA");
     adv->setScanResponseData(scanResp);
 #if defined(XUNA_AMS) && XUNA_AMS
-    if (!ams_.begin()) return false;
+    if (!ams_.begin())
+      return false;
 #endif
     return true;
   }
@@ -142,15 +155,19 @@ class HidManager : public IHidControl {
   // IHidControl implementation (UDC-2 opcodes 12 and 13).
   bool canSendConsumerKey() const override {
 #if defined(XUNA_AMS) && XUNA_AMS
-    if (ams_.ready()) return true;
+    if (ams_.ready())
+      return true;
 #endif
     return hidConnected() && input_ != nullptr;
   }
 
-  uint8_t sendConsumerKey(uint8_t usageIndex, uint8_t source, uint32_t now) override {
+  uint8_t sendConsumerKey(uint8_t usageIndex, uint8_t source,
+                          uint32_t now) override {
     hid::ConsumerKey key = hid::ConsumerKey::None;
-    if (!hid::keyFromIndex(usageIndex, key)) return V1LifeCoreAdapter::kInvalidArgument;
-    if (!sendKey(key, now)) return V1LifeCoreAdapter::kNotReady;
+    if (!hid::keyFromIndex(usageIndex, key))
+      return V1LifeCoreAdapter::kInvalidArgument;
+    if (!sendKey(key, now))
+      return V1LifeCoreAdapter::kNotReady;
     Serial.printf("hid cmd_key=0x%02x src=%u\n",
                   unsigned(static_cast<uint8_t>(key)), unsigned(source));
     return V1LifeCoreAdapter::kOk;
@@ -159,7 +176,8 @@ class HidManager : public IHidControl {
   uint8_t handleHidHosts(uint8_t subOp, uint8_t slot, uint32_t requestId,
                          uint32_t now) override {
     if (subOp == 1) {
-      if (slot >= hid::HidHostsCodec::kMaxSlots) return V1LifeCoreAdapter::kInvalidArgument;
+      if (slot >= hid::HidHostsCodec::kMaxSlots)
+        return V1LifeCoreAdapter::kInvalidArgument;
       forgetHostSlot(slot);
       Serial.printf("hid hosts_cmd=forget_slot slot=%u\n", unsigned(slot));
       return V1LifeCoreAdapter::kOk;
@@ -167,15 +185,37 @@ class HidManager : public IHidControl {
     if (subOp == 2) {
       forgetAllConfirm_.start(requestId, now);
       forgetAllPromptPending_ = true;
-      Serial.printf("hid hosts_cmd=forget_all_prompt req=%u\n", unsigned(requestId));
+      Serial.printf("hid hosts_cmd=forget_all_prompt req=%u\n",
+                    unsigned(requestId));
       return V1LifeCoreAdapter::kDeferred;
     }
     if (subOp == 4) {
-      if (slot > 1) return V1LifeCoreAdapter::kInvalidArgument;
+      if (slot > 1)
+        return V1LifeCoreAdapter::kInvalidArgument;
       remote_.setLayout(slot == 1 ? hid::RemoteLayout::Workflows
                                   : hid::RemoteLayout::Media);
       saveLayoutToNvs(slot);
       Serial.printf("hid hosts_cmd=set_layout layout=%u\n", unsigned(slot));
+      return V1LifeCoreAdapter::kOk;
+    }
+    if (subOp == 5) {
+      if (slot > hid::ActionApprovalConfirm::kMaxTimeoutSec) {
+        return V1LifeCoreAdapter::kInvalidArgument;
+      }
+      actionApproval_.start(slot, now);
+      approvalPromptPending_ = true;
+      Serial.printf("hid hosts_cmd=prompt_approval timeout_sec=%u\n",
+                    unsigned(slot));
+      return V1LifeCoreAdapter::kOk;
+    }
+    if (subOp == 6) {
+      if (slot != 0)
+        return V1LifeCoreAdapter::kInvalidArgument;
+      if (actionApproval_.pending()) {
+        actionApproval_.cancel();
+        approvalCancelPending_ = true;
+      }
+      Serial.println("hid hosts_cmd=cancel_approval");
       return V1LifeCoreAdapter::kOk;
     }
     if (subOp == 3) {
@@ -187,12 +227,11 @@ class HidManager : public IHidControl {
     return V1LifeCoreAdapter::kInvalidArgument;
   }
 
-  void openPairingWindow(uint32_t nowMs) {
-    pairingWindow_.open(nowMs);
-  }
+  void openPairingWindow(uint32_t nowMs) { pairingWindow_.open(nowMs); }
 
-  bool takeDeferredResult(uint32_t& requestId, uint8_t& result) {
-    if (!deferredReady_) return false;
+  bool takeDeferredResult(uint32_t &requestId, uint8_t &result) {
+    if (!deferredReady_)
+      return false;
     deferredReady_ = false;
     requestId = deferredRequestId_;
     result = deferredResult_;
@@ -200,35 +239,39 @@ class HidManager : public IHidControl {
   }
 
   // Targeted GATT notification to the app connection ID only (UDC-2 §5.1).
-  void notifyApp(BLECharacteristic* chr, const uint8_t* data, size_t len) const {
-    if (!chr || !data || len == 0) return;
+  void notifyApp(BLECharacteristic *chr, const uint8_t *data,
+                 size_t len) const {
+    if (!chr || !data || len == 0)
+      return;
     const uint16_t connId = appConnId();
     const esp_gatt_if_t gattsIf = gattsIf_.load();
     if (!appConnected() || connId == hid::HidLinkRoles::kNoConnId ||
         gattsIf == ESP_GATT_IF_NONE) {
       return;
     }
-    auto* cccd = reinterpret_cast<BLE2902*>(
+    auto *cccd = reinterpret_cast<BLE2902 *>(
         chr->getDescriptorByUUID(BLEUUID(static_cast<uint16_t>(0x2902))));
-    if (cccd && !cccd->getNotifications()) return;
-    esp_ble_gatts_send_indicate(gattsIf, connId, chr->getHandle(), uint16_t(len),
-                                const_cast<uint8_t*>(data), false);
+    if (cccd && !cccd->getNotifications())
+      return;
+    esp_ble_gatts_send_indicate(gattsIf, connId, chr->getHandle(),
+                                uint16_t(len), const_cast<uint8_t *>(data),
+                                false);
   }
 
   void encodeHidHosts(uint32_t nowMs, uint8_t out[hid::HidHostsCodec::kSize]) {
     const uint8_t hostSlot = connectedHidSlot();
     const uint8_t appSlot = connectedAppSlot();
-    const bool winOpen = pairingWindow_.isOpen(
-        nowMs, slots_.usedCount(), inEgg_, qrCardOpen_);
+    const bool winOpen =
+        pairingWindow_.isOpen(nowMs, slots_.usedCount(), inEgg_, qrCardOpen_);
     const hid::HidHostsProjection proj = slots_.buildProjection(
         true, hostSlot, appSlot, remote_.active(), winOpen,
         pairing_.pending() || forgetAllConfirm_.pending(), currentDay_);
     hid::HidHostsCodec::encode(proj, out);
   }
 
-  void onConnect(BLEServer* server, uint16_t connId, const esp_bd_addr_t bda,
-                 uint32_t nowMs, std::atomic<uint32_t>& session,
-                 std::atomic<bool>& appConn, std::atomic<uint16_t>& central) {
+  void onConnect(BLEServer *server, uint16_t connId, const esp_bd_addr_t bda,
+                 uint32_t nowMs, std::atomic<uint32_t> &session,
+                 std::atomic<bool> &appConn, std::atomic<uint16_t> &central) {
     hid::HidLinkRoles::Action r;
     bool adv = false;
     portENTER_CRITICAL(&mux_);
@@ -237,7 +280,8 @@ class HidManager : public IHidControl {
       rememberPeerLocked(connId, bda);
       appConn.store(roles_.appConnected());
       central.store(roles_.appConnId());
-      if (r.sessionBump) ++session;
+      if (r.sessionBump)
+        ++session;
       adv = roles_.shouldAdvertise();
     }
     portEXIT_CRITICAL(&mux_);
@@ -254,11 +298,13 @@ class HidManager : public IHidControl {
     uint8_t remoteBda[ESP_BD_ADDR_LEN];
     std::memcpy(remoteBda, bda, ESP_BD_ADDR_LEN);
     server->updateConnParams(remoteBda, 0x10, 0x20, 0, 400);
-    if (adv) BLEDevice::startAdvertising();
+    if (adv)
+      BLEDevice::startAdvertising();
   }
 
-  void onDisconnect(uint16_t connId, std::atomic<uint32_t>& session,
-                    std::atomic<bool>& appConn, std::atomic<uint16_t>& central) {
+  void onDisconnect(uint16_t connId, std::atomic<uint32_t> &session,
+                    std::atomic<bool> &appConn,
+                    std::atomic<uint16_t> &central) {
     hid::HidLinkRoles::Action r;
     bool adv = false;
 #if defined(XUNA_AMS) && XUNA_AMS
@@ -273,27 +319,32 @@ class HidManager : public IHidControl {
     forgetPeerLocked(connId);
     appConn.store(roles_.appConnected());
     central.store(roles_.appConnId());
-    if (r.sessionBump) ++session;
+    if (r.sessionBump)
+      ++session;
     adv = roles_.shouldAdvertise();
     portEXIT_CRITICAL(&mux_);
 
 #if defined(XUNA_AMS) && XUNA_AMS
-    if (hadBda) ams_.onPeerDisconnected(discBda);
+    if (hadBda)
+      ams_.onPeerDisconnected(discBda);
 #endif
-    if (adv) BLEDevice::startAdvertising();
+    if (adv)
+      BLEDevice::startAdvertising();
   }
 
-  bool onAppAccessFromCallback(uint16_t connId, std::atomic<uint32_t>& session,
-                               std::atomic<bool>& appConn,
-                               std::atomic<uint16_t>& central) {
-    if (connId == hid::HidLinkRoles::kNoConnId) return appConn.load();
+  bool onAppAccessFromCallback(uint16_t connId, std::atomic<uint32_t> &session,
+                               std::atomic<bool> &appConn,
+                               std::atomic<uint16_t> &central) {
+    if (connId == hid::HidLinkRoles::kNoConnId)
+      return appConn.load();
     hid::HidLinkRoles::Action r;
     bool isApp = false;
     portENTER_CRITICAL(&mux_);
     r = roles_.onAppAccess(connId);
     appConn.store(roles_.appConnected());
     central.store(roles_.appConnId());
-    if (r.sessionBump) ++session;
+    if (r.sessionBump)
+      ++session;
     isApp = (roles_.appConnId() == connId);
     portEXIT_CRITICAL(&mux_);
 
@@ -348,15 +399,18 @@ class HidManager : public IHidControl {
 
   bool releasePending() const { return releasePending_; }
   bool overlayKeepAlive() const {
-    return pairing_.pending() || forgetAllConfirm_.pending() || remote_.active();
+    return pairing_.pending() || forgetAllConfirm_.pending() ||
+           actionApproval_.pending() || remote_.active();
   }
 
   void recordLoopGap(uint32_t us) { gaps_.add(us); }
   void recordRender(uint32_t us) {
-    if (us > renderMaxUs_) renderMaxUs_ = us;
+    if (us > renderMaxUs_)
+      renderMaxUs_ = us;
   }
   void recordBleCmdResult(uint8_t result) {
-    if (result != 0 && result != V1LifeCoreAdapter::kDeferred) ++bleCmdFail_;
+    if (result != 0 && result != V1LifeCoreAdapter::kDeferred)
+      ++bleCmdFail_;
   }
 
   bool sendKey(hid::ConsumerKey key, uint32_t nowMs) {
@@ -366,7 +420,8 @@ class HidManager : public IHidControl {
     }
 #endif
     const uint8_t report = hid::pressReport(key);
-    if (!report || !input_) return false;
+    if (!report || !input_)
+      return false;
     const uint16_t connId = hidConnId();
     const esp_gatt_if_t gattsIf = gattsIf_.load();
     if (!hidConnected() || connId == hid::HidLinkRoles::kNoConnId ||
@@ -382,7 +437,8 @@ class HidManager : public IHidControl {
     uint8_t press = report;
     const esp_err_t err = esp_ble_gatts_send_indicate(
         gattsIf, connId, input_->getHandle(), 1, &press, false);
-    if (err != ESP_OK) return false;
+    if (err != ESP_OK)
+      return false;
     releasePending_ = true;
     releaseConnId_ = connId;
     releaseAtMs_ = nowMs + hid::kMinReleaseDelayMs;
@@ -395,8 +451,8 @@ class HidManager : public IHidControl {
   UiAction update(bool inEgg, bool qrCardOpen, uint16_t currentDay, bool happy,
                   bool idle, bool happyHold, bool idleHold, bool bothHold,
                   bool buttonsAlreadyConsumed, uint32_t nowMs,
-                  std::atomic<uint32_t>& session, std::atomic<bool>& appConn,
-                  std::atomic<uint16_t>& central) {
+                  std::atomic<uint32_t> &session, std::atomic<bool> &appConn,
+                  std::atomic<uint16_t> &central) {
     inEgg_ = inEgg;
     qrCardOpen_ = qrCardOpen;
     currentDay_ = currentDay;
@@ -419,6 +475,15 @@ class HidManager : public IHidControl {
       ui.wake = true;
       setSpeech(ui, "Xóa hết máy đã ghép? GPIO0 đồng ý · GPIO14 hủy", nowMs);
     }
+    if (approvalPromptPending_) {
+      approvalPromptPending_ = false;
+      ui.wake = true;
+      setSpeech(ui, "Duyệt thao tác? GPIO0 đồng ý · GPIO14 hủy", nowMs);
+    }
+    if (approvalCancelPending_) {
+      approvalCancelPending_ = false;
+      ui.clearSpeech = true;
+    }
 
     // 1. Squatter 30 s timeout check.
     {
@@ -427,7 +492,8 @@ class HidManager : public IHidControl {
       tr = roles_.tick(nowMs);
       appConn.store(roles_.appConnected());
       central.store(roles_.appConnId());
-      if (tr.sessionBump) ++session;
+      if (tr.sessionBump)
+        ++session;
       portEXIT_CRITICAL(&mux_);
       if (tr.disconnect &&
           tr.disconnectConnId != hid::HidLinkRoles::kNoConnId && server_) {
@@ -460,7 +526,8 @@ class HidManager : public IHidControl {
       sendConfirmReply(pr.replyToken, pr.reply == hid::PairingReply::Accept);
       ui.clearSpeech = true;
       Serial.printf("hid pairing_reply=%s\n",
-                    pr.reply == hid::PairingReply::Accept ? "accept" : "reject");
+                    pr.reply == hid::PairingReply::Accept ? "accept"
+                                                          : "reject");
     }
     if (pr.consumed) {
       ui.consumed = true;
@@ -469,10 +536,12 @@ class HidManager : public IHidControl {
     // 3b. ForgetAllConfirm (10 s physical confirmation for opcode 13 arg=2).
     if (!ui.consumed && forgetAllConfirm_.pending()) {
       const auto fr = forgetAllConfirm_.update(rawButtons, nowMs);
-      if (fr.consumed) ui.consumed = true;
+      if (fr.consumed)
+        ui.consumed = true;
       if (fr.outcome == hid::ForgetAllConfirm::Outcome::Confirmed) {
         const uint16_t hConn = hidConnId();
-        if (hConn != hid::HidLinkRoles::kNoConnId && hConn != appConnId() && server_) {
+        if (hConn != hid::HidLinkRoles::kNoConnId && hConn != appConnId() &&
+            server_) {
           server_->disconnect(hConn);
         }
         forgetAllBonds();
@@ -492,6 +561,27 @@ class HidManager : public IHidControl {
       }
     }
 
+    // 3c. ActionApprovalConfirm (physical R2 action approval for opcode 13
+    // arg=5/6).
+    if (!ui.consumed && actionApproval_.pending()) {
+      const auto ar = actionApproval_.update(rawButtons, nowMs);
+      if (ar.consumed)
+        ui.consumed = true;
+      if (ar.decision == hid::RemoteEventCode::ApprovalApprove) {
+        ui.approvalDecision = uint8_t(hid::RemoteEventCode::ApprovalApprove);
+        ui.sparkle = true;
+        setSpeech(ui, "Đã duyệt thao tác", nowMs);
+        Serial.println("hid approval_decision=approve");
+      } else if (ar.decision == hid::RemoteEventCode::ApprovalReject) {
+        ui.approvalDecision = uint8_t(hid::RemoteEventCode::ApprovalReject);
+        setSpeech(ui, "Đã từ chối thao tác", nowMs);
+        Serial.println("hid approval_decision=reject");
+      } else if (ar.expired) {
+        ui.clearSpeech = true;
+        Serial.println("hid approval_decision=expired");
+      }
+    }
+
     // 4. RemoteMode: always ticked for 60 s inactivity timeout and HID
     // disconnect; button inputs are suppressed if already consumed by pairing,
     // forget-all confirm, wake, or card close.
@@ -508,10 +598,10 @@ class HidManager : public IHidControl {
 #endif
         ;
     const auto rr = remote_.update(remoteButtons, hostReady, nowMs, inEgg);
-    const unsigned slotNum = unsigned(
-        connectedHidSlot() < hid::HidHostsCodec::kMaxSlots
-            ? connectedHidSlot() + 1u
-            : 1u);
+    const unsigned slotNum =
+        unsigned(connectedHidSlot() < hid::HidHostsCodec::kMaxSlots
+                     ? connectedHidSlot() + 1u
+                     : 1u);
     if (rr.enter) {
       ui.wake = true;
       ui.sparkle = true;
@@ -545,20 +635,25 @@ class HidManager : public IHidControl {
       Serial.println("hid remote=stop");
     }
     if (rr.exit) {
-      if (!rr.stop && !ui.showSpeech) ui.clearSpeech = true;
+      if (!rr.stop && !ui.showSpeech)
+        ui.clearSpeech = true;
       Serial.printf("hid remote=off advance_scene=%u stop=%u\n",
                     rr.advanceScene ? 1u : 0u, rr.stop ? 1u : 0u);
     }
-    if (rr.advanceScene) ui.advanceScene = true;
-    if (rr.consumed) ui.consumed = true;
-    if (amsTrackChanged && remote_.active() && !ui.showSpeech && !ui.clearSpeech) {
+    if (rr.advanceScene)
+      ui.advanceScene = true;
+    if (rr.consumed)
+      ui.consumed = true;
+    if (amsTrackChanged && remote_.active() && !ui.showSpeech &&
+        !ui.clearSpeech) {
       char buf[96];
       formatRemoteBubbleText(slotNum, buf, sizeof(buf));
       setSpeech(ui, buf, nowMs);
     }
 
     // 5. Keep the prompt / Remote bubble alive while active so SpeechBubble's
-    // 5-8 s page timer does not hide a 30 s pairing prompt or 60 s Remote session.
+    // 5-8 s page timer does not hide a 30 s pairing prompt or 60 s Remote
+    // session.
     if (!ui.showSpeech && !ui.clearSpeech &&
         uint32_t(nowMs - lastBubbleRefreshMs_) >= kBubbleRefreshMs) {
       if (pairing_.pending()) {
@@ -567,6 +662,8 @@ class HidManager : public IHidControl {
         lastBubbleRefreshMs_ = nowMs;
       } else if (forgetAllConfirm_.pending()) {
         setSpeech(ui, "Xóa hết máy đã ghép? GPIO0 đồng ý · GPIO14 hủy", nowMs);
+      } else if (actionApproval_.pending()) {
+        setSpeech(ui, "Duyệt thao tác? GPIO0 đồng ý · GPIO14 hủy", nowMs);
       } else if (remote_.active()) {
         char buf[96];
         formatRemoteBubbleText(slotNum, buf, sizeof(buf));
@@ -602,7 +699,7 @@ class HidManager : public IHidControl {
         unsigned(resets_));
   }
 
- private:
+private:
   struct GapEvent {
     enum class Type : uint8_t {
       NumericConfirm,
@@ -627,82 +724,86 @@ class HidManager : public IHidControl {
     esp_bd_addr_t bda = {};
   };
 
-  static HidManager*& instancePtr() {
-    static HidManager* p = nullptr;
+  static HidManager *&instancePtr() {
+    static HidManager *p = nullptr;
     return p;
   }
 
   static void gapCallback(esp_gap_ble_cb_event_t event,
-                          esp_ble_gap_cb_param_t* param) {
-    HidManager* inst = instancePtr();
-    if (!inst || !inst->gapQueue_ || !param) return;
+                          esp_ble_gap_cb_param_t *param) {
+    HidManager *inst = instancePtr();
+    if (!inst || !inst->gapQueue_ || !param)
+      return;
     GapEvent ev = {};
     switch (event) {
-      case ESP_GAP_BLE_NC_REQ_EVT:
-        ev.type = GapEvent::Type::NumericConfirm;
-        std::memcpy(ev.bda, param->ble_security.key_notif.bd_addr,
-                    ESP_BD_ADDR_LEN);
-        ev.passkey = param->ble_security.key_notif.passkey;
-        xQueueSend(inst->gapQueue_, &ev, 0);
-        break;
-      case ESP_GAP_BLE_PASSKEY_NOTIF_EVT:
-        ev.type = GapEvent::Type::PasskeyNotify;
-        std::memcpy(ev.bda, param->ble_security.key_notif.bd_addr,
-                    ESP_BD_ADDR_LEN);
-        ev.passkey = param->ble_security.key_notif.passkey;
-        xQueueSend(inst->gapQueue_, &ev, 0);
-        break;
-      case ESP_GAP_BLE_AUTH_CMPL_EVT:
-        ev.type = GapEvent::Type::AuthComplete;
-        std::memcpy(ev.bda, param->ble_security.auth_cmpl.bd_addr,
-                    ESP_BD_ADDR_LEN);
-        ev.success = param->ble_security.auth_cmpl.success;
-        ev.failReason = param->ble_security.auth_cmpl.fail_reason;
-        xQueueSend(inst->gapQueue_, &ev, 0);
-        break;
-      default:
-        break;
+    case ESP_GAP_BLE_NC_REQ_EVT:
+      ev.type = GapEvent::Type::NumericConfirm;
+      std::memcpy(ev.bda, param->ble_security.key_notif.bd_addr,
+                  ESP_BD_ADDR_LEN);
+      ev.passkey = param->ble_security.key_notif.passkey;
+      xQueueSend(inst->gapQueue_, &ev, 0);
+      break;
+    case ESP_GAP_BLE_PASSKEY_NOTIF_EVT:
+      ev.type = GapEvent::Type::PasskeyNotify;
+      std::memcpy(ev.bda, param->ble_security.key_notif.bd_addr,
+                  ESP_BD_ADDR_LEN);
+      ev.passkey = param->ble_security.key_notif.passkey;
+      xQueueSend(inst->gapQueue_, &ev, 0);
+      break;
+    case ESP_GAP_BLE_AUTH_CMPL_EVT:
+      ev.type = GapEvent::Type::AuthComplete;
+      std::memcpy(ev.bda, param->ble_security.auth_cmpl.bd_addr,
+                  ESP_BD_ADDR_LEN);
+      ev.success = param->ble_security.auth_cmpl.success;
+      ev.failReason = param->ble_security.auth_cmpl.fail_reason;
+      xQueueSend(inst->gapQueue_, &ev, 0);
+      break;
+    default:
+      break;
     }
   }
 
   static void gattsCallback(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if,
-                            esp_ble_gatts_cb_param_t* param) {
-    HidManager* inst = instancePtr();
-    if (!inst) return;
-    if (gatts_if != ESP_GATT_IF_NONE) inst->gattsIf_.store(gatts_if);
-    if (!inst->gattsQueue_ || !param) return;
+                            esp_ble_gatts_cb_param_t *param) {
+    HidManager *inst = instancePtr();
+    if (!inst)
+      return;
+    if (gatts_if != ESP_GATT_IF_NONE)
+      inst->gattsIf_.store(gatts_if);
+    if (!inst->gattsQueue_ || !param)
+      return;
     GattsEvent ev = {};
     switch (event) {
-      case ESP_GATTS_CONNECT_EVT:
-        ev.type = GattsEvent::Type::Connect;
-        ev.connId = param->connect.conn_id;
-        std::memcpy(ev.bda, param->connect.remote_bda, ESP_BD_ADDR_LEN);
+    case ESP_GATTS_CONNECT_EVT:
+      ev.type = GattsEvent::Type::Connect;
+      ev.connId = param->connect.conn_id;
+      std::memcpy(ev.bda, param->connect.remote_bda, ESP_BD_ADDR_LEN);
+      xQueueSend(inst->gattsQueue_, &ev, 0);
+      break;
+    case ESP_GATTS_READ_EVT:
+      if (inst->inCustomService(param->read.handle)) {
+        ev.type = GattsEvent::Type::AppAccess;
+        ev.connId = param->read.conn_id;
         xQueueSend(inst->gattsQueue_, &ev, 0);
-        break;
-      case ESP_GATTS_READ_EVT:
-        if (inst->inCustomService(param->read.handle)) {
-          ev.type = GattsEvent::Type::AppAccess;
-          ev.connId = param->read.conn_id;
-          xQueueSend(inst->gattsQueue_, &ev, 0);
-        } else if (inst->inHidService(param->read.handle)) {
-          ev.type = GattsEvent::Type::HidAccess;
-          ev.connId = param->read.conn_id;
-          xQueueSend(inst->gattsQueue_, &ev, 0);
-        }
-        break;
-      case ESP_GATTS_WRITE_EVT:
-        if (inst->inCustomService(param->write.handle)) {
-          ev.type = GattsEvent::Type::AppAccess;
-          ev.connId = param->write.conn_id;
-          xQueueSend(inst->gattsQueue_, &ev, 0);
-        } else if (inst->inHidService(param->write.handle)) {
-          ev.type = GattsEvent::Type::HidAccess;
-          ev.connId = param->write.conn_id;
-          xQueueSend(inst->gattsQueue_, &ev, 0);
-        }
-        break;
-      default:
-        break;
+      } else if (inst->inHidService(param->read.handle)) {
+        ev.type = GattsEvent::Type::HidAccess;
+        ev.connId = param->read.conn_id;
+        xQueueSend(inst->gattsQueue_, &ev, 0);
+      }
+      break;
+    case ESP_GATTS_WRITE_EVT:
+      if (inst->inCustomService(param->write.handle)) {
+        ev.type = GattsEvent::Type::AppAccess;
+        ev.connId = param->write.conn_id;
+        xQueueSend(inst->gattsQueue_, &ev, 0);
+      } else if (inst->inHidService(param->write.handle)) {
+        ev.type = GattsEvent::Type::HidAccess;
+        ev.connId = param->write.conn_id;
+        xQueueSend(inst->gattsQueue_, &ev, 0);
+      }
+      break;
+    default:
+      break;
     }
   }
 
@@ -753,7 +854,8 @@ class HidManager : public IHidControl {
   }
 
   bool bdaForConnIdLocked(uint16_t connId, esp_bd_addr_t outBda) const {
-    if (connId == hid::HidLinkRoles::kNoConnId) return false;
+    if (connId == hid::HidLinkRoles::kNoConnId)
+      return false;
     for (size_t i = 0; i < 4; ++i) {
       if (peers_[i].active && peers_[i].connId == connId) {
         std::memcpy(outBda, peers_[i].bda, ESP_BD_ADDR_LEN);
@@ -771,7 +873,8 @@ class HidManager : public IHidControl {
       found = bdaForConnIdLocked(roles_.hidConnId(), bda);
     }
     portEXIT_CRITICAL(&mux_);
-    if (!found) return hid::HidHostsCodec::kNoSlot;
+    if (!found)
+      return hid::HidHostsCodec::kNoSlot;
     const int idx = slots_.findByAddress(bda);
     return idx >= 0 ? uint8_t(idx) : hid::HidHostsCodec::kNoSlot;
   }
@@ -784,14 +887,16 @@ class HidManager : public IHidControl {
       found = bdaForConnIdLocked(roles_.appConnId(), bda);
     }
     portEXIT_CRITICAL(&mux_);
-    if (!found) return hid::HidHostsCodec::kNoSlot;
+    if (!found)
+      return hid::HidHostsCodec::kNoSlot;
     const int idx = slots_.findByAddress(bda);
     return idx >= 0 ? uint8_t(idx) : hid::HidHostsCodec::kNoSlot;
   }
 
   void saveLayoutToNvs(uint8_t layout) {
     Preferences prefs;
-    if (!prefs.begin("xuna_hid", false)) return;
+    if (!prefs.begin("xuna_hid", false))
+      return;
     prefs.putUChar("layout", layout == 1 ? 1u : 0u);
     prefs.end();
   }
@@ -807,7 +912,8 @@ class HidManager : public IHidControl {
       }
     }
     Preferences prefs;
-    if (!prefs.begin("xuna_hid", true)) return;
+    if (!prefs.begin("xuna_hid", true))
+      return;
     uint8_t blob[hid::HidSlotTable::kBlobSize] = {};
     if (prefs.getBytesLength("slots") == sizeof(blob) &&
         prefs.getBytes("slots", blob, sizeof(blob)) == sizeof(blob)) {
@@ -818,7 +924,8 @@ class HidManager : public IHidControl {
 
   void saveSlotsToNvs() {
     Preferences prefs;
-    if (!prefs.begin("xuna_hid", false)) return;
+    if (!prefs.begin("xuna_hid", false))
+      return;
     uint8_t blob[hid::HidSlotTable::kBlobSize] = {};
     slots_.encodeBlob(blob);
     prefs.putBytes("slots", blob, sizeof(blob));
@@ -827,16 +934,19 @@ class HidManager : public IHidControl {
 
   void reconcileBondsWithSlots() {
     int devNum = esp_ble_get_bond_device_num();
-    if (devNum < 0) devNum = 0;
-    if (devNum > 16) devNum = 16;
+    if (devNum < 0)
+      devNum = 0;
+    if (devNum > 16)
+      devNum = 16;
     esp_ble_bond_dev_t list[16] = {};
     if (devNum > 0 && esp_ble_get_bond_device_list(&devNum, list) != ESP_OK) {
       return;
     }
     bool changed = false;
     for (uint8_t s = 0; s < hid::HidHostsCodec::kMaxSlots; ++s) {
-      const auto& e = slots_.entry(s);
-      if (!e.used) continue;
+      const auto &e = slots_.entry(s);
+      if (!e.used)
+        continue;
       bool present = false;
       for (int i = 0; i < devNum; ++i) {
         if (hid::HidSlotTable::hashAddress(list[i].bd_addr) == e.addrHash) {
@@ -859,12 +969,14 @@ class HidManager : public IHidControl {
         }
       }
     }
-    if (changed) saveSlotsToNvs();
+    if (changed)
+      saveSlotsToNvs();
   }
 
   void forgetHostSlot(uint8_t slot) {
-    if (slot >= hid::HidHostsCodec::kMaxSlots) return;
-    const auto& entry = slots_.entry(slot);
+    if (slot >= hid::HidHostsCodec::kMaxSlots)
+      return;
+    const auto &entry = slots_.entry(slot);
     const uint32_t hash = entry.used ? entry.addrHash : 0;
     if (hash != 0) {
       uint16_t toDisc = hid::HidLinkRoles::kNoConnId;
@@ -883,7 +995,8 @@ class HidManager : public IHidControl {
 
       int devNum = esp_ble_get_bond_device_num();
       if (devNum > 0) {
-        if (devNum > 16) devNum = 16;
+        if (devNum > 16)
+          devNum = 16;
         esp_ble_bond_dev_t list[16] = {};
         if (esp_ble_get_bond_device_list(&devNum, list) == ESP_OK) {
           for (int i = 0; i < devNum; ++i) {
@@ -912,7 +1025,7 @@ class HidManager : public IHidControl {
     esp_ble_confirm_reply(bda, accept);
   }
 
-  static void formatPasskeyPrompt(char* out, size_t cap, uint32_t passkey) {
+  static void formatPasskeyPrompt(char *out, size_t cap, uint32_t passkey) {
     const unsigned hi = unsigned((passkey / 1000u) % 1000u);
     const unsigned lo = unsigned(passkey % 1000u);
     std::snprintf(out, cap,
@@ -920,7 +1033,7 @@ class HidManager : public IHidControl {
                   lo);
   }
 
-  void formatRemoteBubbleText(unsigned slotNum, char* out, size_t cap) const {
+  void formatRemoteBubbleText(unsigned slotNum, char *out, size_t cap) const {
 #if defined(XUNA_AMS) && XUNA_AMS
     if (ams_.ready()) {
       ams_.model().formatRemoteBubble(slotNum, out, cap);
@@ -930,15 +1043,15 @@ class HidManager : public IHidControl {
     std::snprintf(out, cap, "Remote > máy %u", slotNum);
   }
 
-  void setSpeech(UiAction& ui, const char* text, uint32_t nowMs) {
+  void setSpeech(UiAction &ui, const char *text, uint32_t nowMs) {
     std::snprintf(ui.speech, sizeof(ui.speech), "%s", text);
     ui.showSpeech = true;
     ui.clearSpeech = false;
     lastBubbleRefreshMs_ = nowMs;
   }
 
-  void drainQueues(uint32_t nowMs, UiAction& ui, std::atomic<uint32_t>& session,
-                   std::atomic<bool>& appConn, std::atomic<uint16_t>& central) {
+  void drainQueues(uint32_t nowMs, UiAction &ui, std::atomic<uint32_t> &session,
+                   std::atomic<bool> &appConn, std::atomic<uint16_t> &central) {
     GattsEvent ge;
     while (xQueueReceive(gattsQueue_, &ge, 0) == pdTRUE) {
       if (ge.type == GattsEvent::Type::Connect) {
@@ -1077,21 +1190,26 @@ class HidManager : public IHidControl {
 
   int forgetAllBonds() {
     int devNum = esp_ble_get_bond_device_num();
-    if (devNum <= 0) return 0;
-    if (devNum > 16) devNum = 16;
+    if (devNum <= 0)
+      return 0;
+    if (devNum > 16)
+      devNum = 16;
     esp_ble_bond_dev_t list[16];
-    if (esp_ble_get_bond_device_list(&devNum, list) != ESP_OK) return 0;
+    if (esp_ble_get_bond_device_list(&devNum, list) != ESP_OK)
+      return 0;
     int removed = 0;
     for (int i = 0; i < devNum; ++i) {
-      if (esp_ble_remove_bond_device(list[i].bd_addr) == ESP_OK) ++removed;
+      if (esp_ble_remove_bond_device(list[i].bd_addr) == ESP_OK)
+        ++removed;
     }
     return removed;
   }
 
-  void serviceSerial(uint32_t nowMs, UiAction& ui) {
+  void serviceSerial(uint32_t nowMs, UiAction &ui) {
     while (Serial.available() > 0) {
       const int ch = Serial.read();
-      if (ch < 0) break;
+      if (ch < 0)
+        break;
       if (ch == '\r' || ch == '\n') {
         if (cmdLen_ > 0) {
           cmdBuf_[cmdLen_] = 0;
@@ -1104,8 +1222,9 @@ class HidManager : public IHidControl {
     }
   }
 
-  void handleSerialCommand(const char* line, uint32_t nowMs, UiAction& ui) {
-    while (*line == ' ') ++line;
+  void handleSerialCommand(const char *line, uint32_t nowMs, UiAction &ui) {
+    while (*line == ' ')
+      ++line;
     if (std::strcmp(line, "hid status") == 0) {
       printStatusLine();
     } else if (std::strcmp(line, "hid forget") == 0) {
@@ -1131,19 +1250,20 @@ class HidManager : public IHidControl {
       Serial.printf("hid stop sent=%u\n", sent ? 1u : 0u);
 #if defined(XUNA_AMS) && XUNA_AMS
     } else if (std::strcmp(line, "ams status") == 0) {
-      Serial.printf("ams ready=%u mask=0x%04x playing=%u title=\"%s\" artist=\"%s\"\n",
-                    ams_.ready() ? 1u : 0u,
-                    unsigned(ams_.model().supportedCommandsMask()),
-                    ams_.model().playing() ? 1u : 0u,
-                    ams_.model().title(), ams_.model().artist());
+      Serial.printf(
+          "ams ready=%u mask=0x%04x playing=%u title=\"%s\" artist=\"%s\"\n",
+          ams_.ready() ? 1u : 0u,
+          unsigned(ams_.model().supportedCommandsMask()),
+          ams_.model().playing() ? 1u : 0u, ams_.model().title(),
+          ams_.model().artist());
 #endif
     }
   }
 
   mutable portMUX_TYPE mux_ = portMUX_INITIALIZER_UNLOCKED;
-  BLEServer* server_ = nullptr;
-  BLEHIDDevice* hid_ = nullptr;
-  BLECharacteristic* input_ = nullptr;
+  BLEServer *server_ = nullptr;
+  BLEHIDDevice *hid_ = nullptr;
+  BLECharacteristic *input_ = nullptr;
   BLESecurity security_;
   QueueHandle_t gapQueue_ = nullptr;
   QueueHandle_t gattsQueue_ = nullptr;
@@ -1160,6 +1280,7 @@ class HidManager : public IHidControl {
   hid::PairingConfirm pairing_;
   hid::PairingWindow pairingWindow_;
   hid::ForgetAllConfirm forgetAllConfirm_;
+  hid::ActionApprovalConfirm actionApproval_;
   hid::HidSlotTable slots_;
   hid::RemoteMode remote_;
 #if defined(XUNA_AMS) && XUNA_AMS
@@ -1171,6 +1292,8 @@ class HidManager : public IHidControl {
   uint16_t currentDay_ = 0xFFFF;
   bool pairingWindowPromptPending_ = false;
   bool forgetAllPromptPending_ = false;
+  bool approvalPromptPending_ = false;
+  bool approvalCancelPending_ = false;
   bool deferredReady_ = false;
   uint32_t deferredRequestId_ = 0;
   uint8_t deferredResult_ = 0;
@@ -1190,5 +1313,5 @@ class HidManager : public IHidControl {
   size_t cmdLen_ = 0;
 };
 
-}  // namespace xuna
-#endif  // defined(XUNA_HID) && XUNA_HID
+} // namespace xuna
+#endif // defined(XUNA_HID) && XUNA_HID

@@ -172,6 +172,80 @@ void remote_workflows_layout_triggers_slots_1_and_2_and_opcode_13_arg_4() {
   TEST_ASSERT_EQUAL_UINT8(3, b2[7]);
 }
 
+void action_approval_confirm_handles_approve_reject_cancel_timeout_and_opcode_13() {
+  ActionApprovalConfirm confirm;
+  TEST_ASSERT_FALSE(confirm.pending());
+
+  // Start with default 0 -> 30 s timeout.
+  confirm.start(0, 1000);
+  TEST_ASSERT_TRUE(confirm.pending());
+  TEST_ASSERT_EQUAL_UINT32(30000, confirm.timeoutMs());
+
+  // GPIO0 short -> ApprovalApprove (4).
+  RemoteInput approveEv;
+  approveEv.happy = true;
+  const auto resApprove = confirm.update(approveEv, 2500);
+  TEST_ASSERT_FALSE(confirm.pending());
+  TEST_ASSERT_TRUE(resApprove.consumed);
+  TEST_ASSERT_FALSE(resApprove.expired);
+  TEST_ASSERT_EQUAL_UINT8(uint8_t(RemoteEventCode::ApprovalApprove), uint8_t(resApprove.decision));
+
+  // Start with explicit 20 s timeout -> GPIO14 short -> ApprovalReject (5).
+  confirm.start(20, 3000);
+  TEST_ASSERT_TRUE(confirm.pending());
+  TEST_ASSERT_EQUAL_UINT32(20000, confirm.timeoutMs());
+  RemoteInput rejectEv;
+  rejectEv.idle = true;
+  const auto resReject = confirm.update(rejectEv, 4000);
+  TEST_ASSERT_FALSE(confirm.pending());
+  TEST_ASSERT_TRUE(resReject.consumed);
+  TEST_ASSERT_EQUAL_UINT8(uint8_t(RemoteEventCode::ApprovalReject), uint8_t(resReject.decision));
+
+  // Cancel clears pending state.
+  confirm.start(15, 5000);
+  TEST_ASSERT_TRUE(confirm.pending());
+  confirm.cancel();
+  TEST_ASSERT_FALSE(confirm.pending());
+
+  // Timeout after 10 s expires and clears pending state.
+  confirm.start(10, 6000);
+  const RemoteInput none;
+  const auto beforeTimeout = confirm.update(none, 6000 + 9999);
+  TEST_ASSERT_TRUE(confirm.pending());
+  TEST_ASSERT_FALSE(beforeTimeout.expired);
+  const auto atTimeout = confirm.update(none, 6000 + 10000);
+  TEST_ASSERT_FALSE(confirm.pending());
+  TEST_ASSERT_TRUE(atTimeout.expired);
+  TEST_ASSERT_EQUAL_UINT8(uint8_t(RemoteEventCode::None), uint8_t(atTimeout.decision));
+
+  // Opcode 13 arg=5 (PromptApproval, source <= 120) and arg=6 (CancelApproval, source == 0).
+  const uint8_t cmdPrompt[8] = {1, 13, 20, 0, 0, 0, 5, 30};
+  const uint8_t cmdPromptBad[8] = {1, 13, 21, 0, 0, 0, 5, 121};
+  const uint8_t cmdCancel[8] = {1, 13, 22, 0, 0, 0, 6, 0};
+  const uint8_t cmdCancelBad[8] = {1, 13, 23, 0, 0, 0, 6, 1};
+  const auto pPrompt = xuna::parseCommand(cmdPrompt, 8, false, false, false, false, false, false, true);
+  const auto pPromptBad = xuna::parseCommand(cmdPromptBad, 8, false, false, false, false, false, false, true);
+  const auto pCancel = xuna::parseCommand(cmdCancel, 8, false, false, false, false, false, false, true);
+  const auto pCancelBad = xuna::parseCommand(cmdCancelBad, 8, false, false, false, false, false, false, true);
+  TEST_ASSERT_EQUAL_UINT8(0, pPrompt.error);
+  TEST_ASSERT_EQUAL_UINT8(5, pPrompt.arg);
+  TEST_ASSERT_EQUAL_UINT8(30, pPrompt.source);
+  TEST_ASSERT_EQUAL_UINT8(4, pPromptBad.error);
+  TEST_ASSERT_EQUAL_UINT8(0, pCancel.error);
+  TEST_ASSERT_EQUAL_UINT8(6, pCancel.arg);
+  TEST_ASSERT_EQUAL_UINT8(4, pCancelBad.error);
+
+  // Status kind 3 arg=4 (approve) and arg=5 (reject).
+  uint8_t bApprove[16] = {};
+  uint8_t bReject[16] = {};
+  xuna::V1LifeCoreAdapter::encodeStatus(3, 0, 0, 4, 45, 10000, bApprove);
+  xuna::V1LifeCoreAdapter::encodeStatus(3, 0, 0, 5, 46, 11000, bReject);
+  TEST_ASSERT_EQUAL_UINT8(3, bApprove[1]);
+  TEST_ASSERT_EQUAL_UINT8(4, bApprove[7]);
+  TEST_ASSERT_EQUAL_UINT8(3, bReject[1]);
+  TEST_ASSERT_EQUAL_UINT8(5, bReject[7]);
+}
+
 void setUp() {}
 void tearDown() {}
 
@@ -183,6 +257,7 @@ int main() {
   RUN_TEST(remote_mode_exits_on_60s_inactivity_and_on_hid_disconnect);
   RUN_TEST(remote_stop_status_notification_encodes_kind_3_and_event_arg_1);
   RUN_TEST(remote_workflows_layout_triggers_slots_1_and_2_and_opcode_13_arg_4);
+  RUN_TEST(action_approval_confirm_handles_approve_reject_cancel_timeout_and_opcode_13);
   return UNITY_END();
 }
 

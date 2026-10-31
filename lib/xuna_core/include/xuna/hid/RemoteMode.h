@@ -10,6 +10,88 @@ enum class RemoteLayout : uint8_t {
   Workflows = 1,
 };
 
+enum class HidHostsArg : uint8_t {
+  ForgetSlot = 1,
+  ForgetAll = 2,
+  OpenPairingWindow = 3,
+  SetRemoteLayout = 4,
+  PromptApproval = 5,
+  CancelApproval = 6,
+};
+
+enum class RemoteEventCode : uint8_t {
+  None = 0,
+  Stop = 1,
+  WorkflowSlot1 = 2,
+  WorkflowSlot2 = 3,
+  ApprovalApprove = 4,
+  ApprovalReject = 5,
+};
+
+// On-screen R2 action approval prompt (UDC-12 S12.1):
+// Triggered by BLE opcode 13 arg=5 (PromptApproval, source=timeoutSec or 0 -> 30s)
+// and cancelled by arg=6 (CancelApproval).
+// GPIO0 short press -> ApprovalApprove (4); GPIO14 short press -> ApprovalReject (5).
+// Timeout -> silently expires (mobile phone handles its own approval TTL).
+class ActionApprovalConfirm {
+ public:
+  static constexpr uint32_t kDefaultTimeoutMs = 30000;
+  static constexpr uint8_t kMaxTimeoutSec = 120;
+
+  struct Result {
+    RemoteEventCode decision = RemoteEventCode::None;
+    bool expired = false;
+    bool consumed = false;
+  };
+
+  bool pending() const { return pending_; }
+  uint32_t timeoutMs() const { return timeoutMs_; }
+
+  void start(uint8_t timeoutSec, uint32_t nowMs) {
+    const uint8_t sec = timeoutSec > kMaxTimeoutSec ? kMaxTimeoutSec : timeoutSec;
+    timeoutMs_ = sec == 0 ? kDefaultTimeoutMs : uint32_t(sec) * 1000u;
+    startedAt_ = nowMs;
+    pending_ = true;
+  }
+
+  void cancel() {
+    pending_ = false;
+    startedAt_ = 0;
+    timeoutMs_ = kDefaultTimeoutMs;
+  }
+
+  template <typename Events>
+  Result update(const Events& events, uint32_t nowMs) {
+    Result out;
+    if (!pending_) return out;
+
+    const bool anyButton = events.happy || events.idle || events.happyHold ||
+                           events.idleHold || events.bothHold;
+    if (anyButton) out.consumed = true;
+
+    if (events.happy) {
+      out.decision = RemoteEventCode::ApprovalApprove;
+      cancel();
+      return out;
+    }
+    if (events.idle) {
+      out.decision = RemoteEventCode::ApprovalReject;
+      cancel();
+      return out;
+    }
+    if (uint32_t(nowMs - startedAt_) >= timeoutMs_) {
+      out.expired = true;
+      cancel();
+    }
+    return out;
+  }
+
+ private:
+  bool pending_ = false;
+  uint32_t startedAt_ = 0;
+  uint32_t timeoutMs_ = kDefaultTimeoutMs;
+};
+
 struct RemoteInput {
   bool happy = false;
   bool idle = false;

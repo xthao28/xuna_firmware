@@ -548,6 +548,7 @@ class BleManager {
     if(ui.remoteStop)remoteEvent(1,now);
     if(ui.remoteWorkflowSlot==1)remoteEvent(2,now);
     else if(ui.remoteWorkflowSlot==2)remoteEvent(3,now);
+    if(ui.approvalDecision!=0)remoteEvent(ui.approvalDecision,now);
     return ui;
   }
 #endif
