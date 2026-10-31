@@ -263,7 +263,7 @@ class BleManager {
     uint8_t b[8]={1,8,0xff,0xbf,0xff,0x07,0x60,0x09};
 #endif
 #if defined(XUNA_HID) && XUNA_HID
-    b[5]|=0x38;
+    b[5]|=0x78;
 #endif
 #if defined(XUNA_AMS) && XUNA_AMS
     b[5]|=0x80;
@@ -537,11 +537,16 @@ class BleManager {
 #if defined(XUNA_HID) && XUNA_HID
   HidManager& hid() {return hid_;}
   const HidManager& hid() const {return hid_;}
+  void remoteEvent(uint8_t eventCode,uint32_t now) {
+    ++sequence_;publish(3,0,0,static_cast<PetState>(eventCode),now);
+  }
   HidManager::UiAction updateHid(bool inEgg,bool qrCardOpen,uint16_t currentDay,bool happy,bool idle,
                                  bool happyHold,bool idleHold,bool bothHold,
                                  bool buttonsAlreadyConsumed,uint32_t now) {
-    return hid_.update(inEgg,qrCardOpen,currentDay,happy,idle,happyHold,idleHold,bothHold,
-                       buttonsAlreadyConsumed,now,session_,connected_,central_);
+    auto ui=hid_.update(inEgg,qrCardOpen,currentDay,happy,idle,happyHold,idleHold,bothHold,
+                        buttonsAlreadyConsumed,now,session_,connected_,central_);
+    if(ui.remoteStop)remoteEvent(1,now);
+    return ui;
   }
 #endif
 };

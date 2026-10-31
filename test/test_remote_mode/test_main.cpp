@@ -1,6 +1,7 @@
 #include <unity.h>
 
 #include <xuna/hid/RemoteMode.h>
+#include <xuna/protocol/V1LifeCoreAdapter.h>
 
 using namespace xuna::hid;
 
@@ -110,6 +111,15 @@ void remote_mode_exits_on_60s_inactivity_and_on_hid_disconnect() {
   TEST_ASSERT_FALSE(remote.active());
 }
 
+void remote_stop_status_notification_encodes_kind_3_and_event_arg_1() {
+  uint8_t b[16] = {};
+  xuna::V1LifeCoreAdapter::encodeStatus(3, 0, 0, 1, 42, 7000, b);
+  TEST_ASSERT_EQUAL_UINT8(1, b[0]);  // version
+  TEST_ASSERT_EQUAL_UINT8(3, b[1]);  // kind = remoteEvent (UDC-7 S7.3)
+  TEST_ASSERT_EQUAL_UINT8(0, b[6]);  // result = ok
+  TEST_ASSERT_EQUAL_UINT8(1, b[7]);  // event arg = 1 (stop)
+}
+
 void setUp() {}
 void tearDown() {}
 
@@ -119,6 +129,7 @@ int main() {
   RUN_TEST(in_egg_blocks_remote_entry);
   RUN_TEST(remote_mode_maps_buttons_and_exits_with_scene_advance_or_stop);
   RUN_TEST(remote_mode_exits_on_60s_inactivity_and_on_hid_disconnect);
+  RUN_TEST(remote_stop_status_notification_encodes_kind_3_and_event_arg_1);
   return UNITY_END();
 }
 

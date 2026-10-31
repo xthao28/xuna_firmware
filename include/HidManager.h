@@ -46,6 +46,7 @@ class HidManager : public IHidControl {
     bool sparkle = false;
     bool advanceScene = false;
     bool consumed = false;
+    bool remoteStop = false;
     char speech[96] = {};
   };
 
@@ -521,6 +522,7 @@ class HidManager : public IHidControl {
     }
     if (rr.stop) {
       sendKey(hid::ConsumerKey::Stop, nowMs);
+      ui.remoteStop = true;
       setSpeech(ui, "Đã dừng", nowMs);
       Serial.println("hid remote=stop");
     }
