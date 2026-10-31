@@ -6,6 +6,7 @@
 #include <xuna/visual/SceneEffects.h>
 #include <xuna/visual/VariantPlayer.h>
 #include <xuna/visual/Backlight.h>
+#include <xuna/visual/SymbioticRoom.h>
 namespace xuna {
 class DisplayManager {
  public:
@@ -13,6 +14,10 @@ class DisplayManager {
   void update(uint32_t now,PetState state);
   // Window scene (redrawn only on change) and the effect above XUNA's head.
   void setBackdrop(Backdrop backdrop){backdrop_=backdrop;}
+  void setEpigeneticTint(EpigeneticTint tint){if(tint_!=tint){tint_=tint;lastFrame_=255;}}
+  EpigeneticTint epigeneticTint() const {return tint_;}
+  void setRoomProp(RoomPropKind prop){if(roomProp_!=prop){roomProp_=prop;windowValid_=false;}}
+  RoomPropKind roomProp() const {return roomProp_;}
   void showEffect(EffectKind kind,uint32_t now){effect_.start(kind,now);}
   // Pet sprite frame period (personality tempo, PE-2).
   void setFramePeriod(uint16_t ms,uint32_t now){visual_.setInterval(ms,now);}
@@ -70,6 +75,8 @@ class DisplayManager {
   Pcg32 random_{42,54};PetVisualAnimation visual_;VariantPlayer variant_;
   WindowWeather weather_;ReactionEffect effect_;
   Backdrop backdrop_=Backdrop::Day,drawnBackdrop_=Backdrop::Day;
+  EpigeneticTint tint_=EpigeneticTint::Original;
+  RoomPropKind roomProp_=RoomPropKind::None;
   bool windowValid_=true;
   uint16_t* card_=nullptr; // PSRAM, full screen
   uint8_t* qr_=nullptr;    // PSRAM, qrcodegen symbol + scratch

@@ -218,7 +218,9 @@ void DisplayManager::update(uint32_t now, PetState state) {
     uint16_t *dst = region_ + y * scene::kSpriteWidth;
     for (unsigned x = 0; x < scene::kSpriteWidth; ++x) {
       const uint16_t color = src[x];
-      dst[x] = color == scene::kTransparent ? bg[x] : color;
+      dst[x] = color == scene::kTransparent
+                   ? bg[x]
+                   : EpigeneticPalette::applyRgb565(color, tint_);
     }
   }
   lcd_.pushImage(scene::kAnchorX, scene::kAnchorY, scene::kSpriteWidth,
@@ -258,6 +260,19 @@ void DisplayManager::drawWindow() {
       const bool bright = i >= 8 || (weather_.stars() & (1u << i));
       put(pgm_read_byte(scene::kStarX + i), pgm_read_byte(scene::kStarY + i),
           bright ? scene::kStarBright : scene::kStarDim);
+    }
+  }
+  if (roomProp_ != RoomPropKind::None) {
+    const uint16_t propColor = SymbioticRoomProps::colorFor(roomProp_);
+    const int baseX = scene::kGlassX + scene::kGlassW - 10;
+    const int baseY = scene::kGlassY + 2;
+    for (uint8_t r = 0; r < SymbioticRoomProps::kPropSize; ++r) {
+      const uint8_t mask = SymbioticRoomProps::bitmaskRow(roomProp_, r);
+      for (uint8_t c = 0; c < SymbioticRoomProps::kPropSize; ++c) {
+        if (mask & (0x80u >> c)) {
+          put(baseX + c, baseY + r, propColor);
+        }
+      }
     }
   }
   lcd_.pushImage(scene::kWindowX, scene::kWindowY, scene::kWindowW,

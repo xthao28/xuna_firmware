@@ -45,6 +45,8 @@ xuna::DeviceKey deviceKey;
 xuna::ScenePreference scenePreference;
 xuna::SceneMode sceneMode = xuna::SceneMode::Auto;
 xuna::EggHatchHold eggHatchHold;
+xuna::RhythmTrickDecoder rhythmDecoder;
+xuna::TrickMasteryTracker trickTracker;
 struct HardwareEntropy : xuna::IRandom { uint32_t next() override { return esp_random(); } } entropy;
 #ifdef XUNA_E14
 xuna::E14Diagnostics e14;  // E14 gate metrics; XUNA_E14=1 also starts the network probe
@@ -348,6 +350,21 @@ void loop() {
       Serial.println(adapter.lastReactionApplied()?"button GPIO14: shoo (reaction), idle":"button GPIO14: idle");
       if(adapter.lastReactionApplied())display.showEffect(xuna::EffectKind::Puff,now);
     }
+    if((events.happy||events.idle)&&readyIdentity){
+      const auto trick=rhythmDecoder.recordShortPress(events.happy,now);
+      if(trick!=xuna::RhythmTrickId::None){
+        trickTracker.recordPractice(trick,now);
+        if(displayReady){
+          display.playVariant(xuna::RhythmTrickDecoder::variantFor(trick),now);
+          display.showEffect(xuna::EffectKind::Sparkle,now);
+          display.showSpeech(xuna::RhythmTrickDecoder::speechFor(trick),now);
+        }
+        Serial.printf("rhythm_trick id=%u reps=%u mastered=%u\n",
+                      unsigned(static_cast<uint8_t>(trick)),
+                      unsigned(trickTracker.reps(trick)),
+                      trickTracker.mastered(trick)?1u:0u);
+      }
+    }
     // GPIO14 hold cycles the window scene. Off before hatch: in Egg the
     // GPIO14 hold is reserved for hatching (S10 protocol freeze).
     if(events.idleHold&&readyIdentity){
@@ -440,6 +457,22 @@ void loop() {
     display.setScreenPower(pacer.screenState(now,animation.state(),overlay),now,animation.state());
     display.setFramePeriod(pacer.framePeriodMs(now,animation.state(),actionBusy,style.framePeriodMs),now);
     display.setBackdrop(xuna::backdropFor(sceneMode,core.clock().dayPart(core.mono64())));
+    if(readyIdentity){
+      const auto& g=core.personality().genome();
+      uint8_t domTrait=0;
+      int16_t maxTrait=xuna::Temperament::effective(g,xuna::TraitId::Curiosity);
+      for(uint8_t t=1;t<5;++t){
+        const int16_t val=xuna::Temperament::effective(g,static_cast<xuna::TraitId>(t));
+        if(val>maxTrait){maxTrait=val;domTrait=t;}
+      }
+      display.setEpigeneticTint(xuna::EpigeneticPalette::tintForPet(readyIdentity->petId,domTrait));
+      const auto act=adapter.last().activity;
+      const auto prop=(animation.state()==xuna::PetState::Sleep)?xuna::RoomPropKind::DreamBubble
+                      :(act==xuna::Activity::Playing||act==xuna::Activity::Observing)?xuna::RoomPropKind::FocusLamp
+                      :(animation.state()==xuna::PetState::Happy)?xuna::RoomPropKind::CoRegHeart
+                      :xuna::RoomPropKind::None;
+      display.setRoomProp(prop);
+    }
 #if defined(XUNA_E14) || (defined(XUNA_HID) && XUNA_HID)
     const uint32_t drawsBefore=display.draws(),drawStarted=micros();
 #endif

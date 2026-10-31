@@ -2,6 +2,7 @@
 
 #include <xuna/hid/RemoteMode.h>
 #include <xuna/protocol/V1LifeCoreAdapter.h>
+#include <xuna/visual/SymbioticRoom.h>
 
 using namespace xuna::hid;
 
@@ -246,6 +247,55 @@ void action_approval_confirm_handles_approve_reject_cancel_timeout_and_opcode_13
   TEST_ASSERT_EQUAL_UINT8(5, bReject[7]);
 }
 
+void sym3_epigenetic_palette_room_props_and_rhythm_tricks_work() {
+  using namespace xuna;
+  const uint8_t petA[16] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
+  const EpigeneticTint tintA = EpigeneticPalette::tintForPet(petA, 0);
+  TEST_ASSERT_TRUE(uint8_t(tintA) >= 1 && uint8_t(tintA) <= 5);
+  TEST_ASSERT_EQUAL_UINT8(uint8_t(EpigeneticTint::Original),
+                          uint8_t(EpigeneticPalette::tintForPet(nullptr, 0)));
+
+  // Dark outline (0x0000) and near-white highlight (0xFFFF) stay untouched.
+  TEST_ASSERT_EQUAL_HEX16(0x0000, EpigeneticPalette::applyRgb565(0x0000, EpigeneticTint::CyanMint));
+  TEST_ASSERT_EQUAL_HEX16(0xFFFF, EpigeneticPalette::applyRgb565(0xFFFF, EpigeneticTint::WarmCoral));
+  // Mid-tone body pixel shifts deterministically.
+  const uint16_t midPixel = uint16_t((16u << 11) | (32u << 5) | 16u);
+  TEST_ASSERT_NOT_EQUAL(midPixel, EpigeneticPalette::applyRgb565(midPixel, EpigeneticTint::CyanMint));
+
+  // Symbiotic Room micro-props return non-zero bitmasks.
+  TEST_ASSERT_NOT_EQUAL(0, SymbioticRoomProps::bitmaskRow(RoomPropKind::FocusLamp, 2));
+  TEST_ASSERT_NOT_EQUAL(0, SymbioticRoomProps::bitmaskRow(RoomPropKind::DreamBubble, 1));
+  TEST_ASSERT_NOT_EQUAL(0, SymbioticRoomProps::bitmaskRow(RoomPropKind::WatchdogBeacon, 5));
+
+  // 2-Button Rhythm Trick Decoder: A-B-A -> SpinDance, B-A-B -> CuriousPeek, A-A-B -> CozyNuzzle.
+  RhythmTrickDecoder decoder;
+  TEST_ASSERT_EQUAL_UINT8(uint8_t(RhythmTrickId::None), uint8_t(decoder.recordShortPress(true, 1000)));
+  TEST_ASSERT_EQUAL_UINT8(uint8_t(RhythmTrickId::None), uint8_t(decoder.recordShortPress(false, 1300)));
+  TEST_ASSERT_EQUAL_UINT8(uint8_t(RhythmTrickId::SpinDance), uint8_t(decoder.recordShortPress(true, 1600)));
+
+  TEST_ASSERT_EQUAL_UINT8(uint8_t(RhythmTrickId::None), uint8_t(decoder.recordShortPress(false, 3000)));
+  TEST_ASSERT_EQUAL_UINT8(uint8_t(RhythmTrickId::None), uint8_t(decoder.recordShortPress(true, 3300)));
+  TEST_ASSERT_EQUAL_UINT8(uint8_t(RhythmTrickId::CuriousPeek), uint8_t(decoder.recordShortPress(false, 3600)));
+
+  // Gap > 750 ms resets the partial sequence.
+  TEST_ASSERT_EQUAL_UINT8(uint8_t(RhythmTrickId::None), uint8_t(decoder.recordShortPress(true, 5000)));
+  TEST_ASSERT_EQUAL_UINT8(uint8_t(RhythmTrickId::None), uint8_t(decoder.recordShortPress(true, 6000)));  // reset!
+  TEST_ASSERT_EQUAL_UINT8(uint8_t(RhythmTrickId::None), uint8_t(decoder.recordShortPress(true, 6300)));
+  TEST_ASSERT_EQUAL_UINT8(uint8_t(RhythmTrickId::CozyNuzzle), uint8_t(decoder.recordShortPress(false, 6600)));
+
+  // L-D3 TrickMasteryTracker masters a trick after 3 repetitions and grows FSRS stability.
+  TrickMasteryTracker tracker;
+  TEST_ASSERT_FALSE(tracker.mastered(RhythmTrickId::SpinDance));
+  tracker.recordPractice(RhythmTrickId::SpinDance, 1000);
+  tracker.recordPractice(RhythmTrickId::SpinDance, 2000);
+  TEST_ASSERT_FALSE(tracker.mastered(RhythmTrickId::SpinDance));
+  tracker.recordPractice(RhythmTrickId::SpinDance, 3000);
+  TEST_ASSERT_TRUE(tracker.mastered(RhythmTrickId::SpinDance));
+  TEST_ASSERT_EQUAL_UINT8(1, tracker.masteredCount());
+  TEST_ASSERT_EQUAL_UINT16(3, tracker.totalReps());
+  TEST_ASSERT_TRUE(tracker.stabilityDaysQ4(RhythmTrickId::SpinDance) > 16);
+}
+
 void setUp() {}
 void tearDown() {}
 
@@ -258,6 +308,7 @@ int main() {
   RUN_TEST(remote_stop_status_notification_encodes_kind_3_and_event_arg_1);
   RUN_TEST(remote_workflows_layout_triggers_slots_1_and_2_and_opcode_13_arg_4);
   RUN_TEST(action_approval_confirm_handles_approve_reject_cancel_timeout_and_opcode_13);
+  RUN_TEST(sym3_epigenetic_palette_room_props_and_rhythm_tricks_work);
   return UNITY_END();
 }
 
