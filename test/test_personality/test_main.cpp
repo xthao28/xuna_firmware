@@ -365,6 +365,45 @@ void shadow_choice_never_overrules_a_learned_preference() {
   TEST_ASSERT_EQUAL_UINT8(0, shadow.choose(0, 0, learner));
 }
 
+void shadow_chat_spam_shifts_affect_immediately_but_trait_requires_days() {
+  PersonalityShadow shadow(0x5eed1234U);
+  const LifeCoreStepOutput out = shownOutput(ActionId::Idle, LearnInteraction::QuietRequest);
+  shadow.begin(0);
+
+  // Day 1: spam 50 praise messages across 5 separate sessions within the same 24h day.
+  uint32_t acceptedDay1 = 0;
+  for (uint32_t s = 0; s < 5; ++s) {
+    const uint32_t t = (s + 1) * 60 * kMinute;
+    shadow.ownerInput(t);
+    for (uint32_t msg = 0; msg < 10; ++msg) {
+      if (shadow.conversation(ConversationTag::Praise, t + msg * 1000)) {
+        ++acceptedDay1;
+      }
+    }
+    if (s == 0) {
+      TEST_ASSERT_TRUE(shadow.affect().state().emotionValence > 0);
+    }
+    shadow.step(t + 35 * kMinute, out);
+  }
+
+  TEST_ASSERT_EQUAL_UINT32(Personality::kConversationDailyCap, acceptedDay1);
+  TEST_ASSERT_EQUAL_UINT32(0, shadow.shifts());
+  TEST_ASSERT_EQUAL_INT16(0, shadow.genome().offset[uint8_t(TraitId::Sociability)]);
+
+  // Days 2..4: consistent daily praise across >= 4 sessions moves Sociability by <= kMaxStep.
+  for (uint32_t day = 1; day <= 3; ++day) {
+    const uint32_t t = day * 1440 * kMinute + 60 * kMinute;
+    shadow.ownerInput(t);
+    for (uint32_t msg = 0; msg < 5; ++msg) {
+      TEST_ASSERT_TRUE(shadow.conversation(ConversationTag::Praise, t + msg * 1000));
+    }
+    shadow.step(t + 35 * kMinute, out);
+  }
+  TEST_ASSERT_EQUAL_UINT32(1, shadow.shifts());
+  TEST_ASSERT_EQUAL_INT16(EvidenceLedger::kMaxStep,
+                          shadow.genome().offset[uint8_t(TraitId::Sociability)]);
+}
+
 void setUp() {}
 void tearDown() {}
 int main() {
@@ -384,5 +423,6 @@ int main() {
   RUN_TEST(shadow_turns_reactions_into_evidence_and_consolidates_per_session);
   RUN_TEST(shadow_absence_changes_nothing);
   RUN_TEST(shadow_choice_never_overrules_a_learned_preference);
+  RUN_TEST(shadow_chat_spam_shifts_affect_immediately_but_trait_requires_days);
   return UNITY_END();
 }

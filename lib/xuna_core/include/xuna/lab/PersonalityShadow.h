@@ -43,6 +43,11 @@ class PersonalityShadow {
   // The owner's pet / shoo that the device applied to the shown decision.
   void reaction(bool pet) { p_.reaction(pet); }
 
+  // A conversation tag (PE-4c), after ownerInput().
+  bool conversation(ConversationTag tag, uint32_t now) {
+    return p_.conversation(tag, now);
+  }
+
   // Every loop, after the BoardLab step.
   void step(uint32_t now, const LifeCoreStepOutput& out) {
     p_.step(now, out.activity, out.needs.energy);
