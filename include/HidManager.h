@@ -47,6 +47,7 @@ class HidManager : public IHidControl {
     bool advanceScene = false;
     bool consumed = false;
     bool remoteStop = false;
+    uint8_t remoteWorkflowSlot = 0;
     char speech[96] = {};
   };
 
@@ -168,6 +169,14 @@ class HidManager : public IHidControl {
       forgetAllPromptPending_ = true;
       Serial.printf("hid hosts_cmd=forget_all_prompt req=%u\n", unsigned(requestId));
       return V1LifeCoreAdapter::kDeferred;
+    }
+    if (subOp == 4) {
+      if (slot > 1) return V1LifeCoreAdapter::kInvalidArgument;
+      remote_.setLayout(slot == 1 ? hid::RemoteLayout::Workflows
+                                  : hid::RemoteLayout::Media);
+      saveLayoutToNvs(slot);
+      Serial.printf("hid hosts_cmd=set_layout layout=%u\n", unsigned(slot));
+      return V1LifeCoreAdapter::kOk;
     }
     if (subOp == 3) {
       openPairingWindow(now);
@@ -520,6 +529,15 @@ class HidManager : public IHidControl {
       Serial.printf("hid remote_key=0x%02x sent=%u\n",
                     unsigned(static_cast<uint8_t>(rr.key)), sent ? 1u : 0u);
     }
+    if (rr.workflowSlot != 0) {
+      ui.remoteWorkflowSlot = rr.workflowSlot;
+      ui.sparkle = true;
+      char buf[96];
+      std::snprintf(buf, sizeof(buf), "Đang chạy: phím tắt %u",
+                    unsigned(rr.workflowSlot));
+      setSpeech(ui, buf, nowMs);
+      Serial.printf("hid remote_workflow slot=%u\n", unsigned(rr.workflowSlot));
+    }
     if (rr.stop) {
       sendKey(hid::ConsumerKey::Stop, nowMs);
       ui.remoteStop = true;
@@ -771,7 +789,23 @@ class HidManager : public IHidControl {
     return idx >= 0 ? uint8_t(idx) : hid::HidHostsCodec::kNoSlot;
   }
 
+  void saveLayoutToNvs(uint8_t layout) {
+    Preferences prefs;
+    if (!prefs.begin("xuna_hid", false)) return;
+    prefs.putUChar("layout", layout == 1 ? 1u : 0u);
+    prefs.end();
+  }
+
   void loadSlotsFromNvs() {
+    {
+      Preferences lprefs;
+      if (lprefs.begin("xuna_hid", true)) {
+        const uint8_t layout = lprefs.getUChar("layout", 0);
+        remote_.setLayout(layout == 1 ? hid::RemoteLayout::Workflows
+                                      : hid::RemoteLayout::Media);
+        lprefs.end();
+      }
+    }
     Preferences prefs;
     if (!prefs.begin("xuna_hid", true)) return;
     uint8_t blob[hid::HidSlotTable::kBlobSize] = {};

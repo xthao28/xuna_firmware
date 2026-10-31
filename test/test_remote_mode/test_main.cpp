@@ -120,6 +120,58 @@ void remote_stop_status_notification_encodes_kind_3_and_event_arg_1() {
   TEST_ASSERT_EQUAL_UINT8(1, b[7]);  // event arg = 1 (stop)
 }
 
+void remote_workflows_layout_triggers_slots_1_and_2_and_opcode_13_arg_4() {
+  RemoteMode remote;
+  remote.setLayout(RemoteLayout::Workflows);
+  TEST_ASSERT_EQUAL_UINT8(uint8_t(RemoteLayout::Workflows), uint8_t(remote.layout()));
+
+  RemoteInput enterEv;
+  enterEv.idleHold = true;
+  remote.update(enterEv, true, 1000, false);
+  TEST_ASSERT_TRUE(remote.active());
+
+  // GPIO0 short -> workflow slot 1 (no ConsumerKey).
+  RemoteInput slot1Ev;
+  slot1Ev.happy = true;
+  const auto out1 = remote.update(slot1Ev, true, 2000, false);
+  TEST_ASSERT_EQUAL_UINT8(uint8_t(ConsumerKey::None), uint8_t(out1.key));
+  TEST_ASSERT_EQUAL_UINT8(1, out1.workflowSlot);
+  TEST_ASSERT_TRUE(out1.consumed);
+
+  // GPIO14 short -> workflow slot 2 (no ConsumerKey).
+  RemoteInput slot2Ev;
+  slot2Ev.idle = true;
+  const auto out2 = remote.update(slot2Ev, true, 3000, false);
+  TEST_ASSERT_EQUAL_UINT8(uint8_t(ConsumerKey::None), uint8_t(out2.key));
+  TEST_ASSERT_EQUAL_UINT8(2, out2.workflowSlot);
+  TEST_ASSERT_TRUE(out2.consumed);
+
+  // Opcode 13 arg=4 source=0|1 valid; source=2 invalid.
+  const uint8_t cmdMedia[8] = {1, 13, 10, 0, 0, 0, 4, 0};
+  const uint8_t cmdWorkflows[8] = {1, 13, 11, 0, 0, 0, 4, 1};
+  const uint8_t cmdInvalid[8] = {1, 13, 12, 0, 0, 0, 4, 2};
+  const auto parsedMedia = xuna::parseCommand(cmdMedia, 8, false, false, false, false, false, false, true);
+  const auto parsedWf = xuna::parseCommand(cmdWorkflows, 8, false, false, false, false, false, false, true);
+  const auto parsedBad = xuna::parseCommand(cmdInvalid, 8, false, false, false, false, false, false, true);
+  TEST_ASSERT_EQUAL_UINT8(0, parsedMedia.error);
+  TEST_ASSERT_EQUAL_UINT8(4, parsedMedia.arg);
+  TEST_ASSERT_EQUAL_UINT8(0, parsedMedia.source);
+  TEST_ASSERT_EQUAL_UINT8(0, parsedWf.error);
+  TEST_ASSERT_EQUAL_UINT8(4, parsedWf.arg);
+  TEST_ASSERT_EQUAL_UINT8(1, parsedWf.source);
+  TEST_ASSERT_EQUAL_UINT8(4, parsedBad.error);
+
+  // Status kind 3 arg=2 (slot 1) and arg=3 (slot 2).
+  uint8_t b1[16] = {};
+  uint8_t b2[16] = {};
+  xuna::V1LifeCoreAdapter::encodeStatus(3, 0, 0, 2, 43, 8000, b1);
+  xuna::V1LifeCoreAdapter::encodeStatus(3, 0, 0, 3, 44, 9000, b2);
+  TEST_ASSERT_EQUAL_UINT8(3, b1[1]);
+  TEST_ASSERT_EQUAL_UINT8(2, b1[7]);
+  TEST_ASSERT_EQUAL_UINT8(3, b2[1]);
+  TEST_ASSERT_EQUAL_UINT8(3, b2[7]);
+}
+
 void setUp() {}
 void tearDown() {}
 
@@ -130,6 +182,7 @@ int main() {
   RUN_TEST(remote_mode_maps_buttons_and_exits_with_scene_advance_or_stop);
   RUN_TEST(remote_mode_exits_on_60s_inactivity_and_on_hid_disconnect);
   RUN_TEST(remote_stop_status_notification_encodes_kind_3_and_event_arg_1);
+  RUN_TEST(remote_workflows_layout_triggers_slots_1_and_2_and_opcode_13_arg_4);
   return UNITY_END();
 }
 

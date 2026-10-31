@@ -546,6 +546,8 @@ class BleManager {
     auto ui=hid_.update(inEgg,qrCardOpen,currentDay,happy,idle,happyHold,idleHold,bothHold,
                         buttonsAlreadyConsumed,now,session_,connected_,central_);
     if(ui.remoteStop)remoteEvent(1,now);
+    if(ui.remoteWorkflowSlot==1)remoteEvent(2,now);
+    else if(ui.remoteWorkflowSlot==2)remoteEvent(3,now);
     return ui;
   }
 #endif

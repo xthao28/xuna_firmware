@@ -5,6 +5,11 @@
 namespace xuna {
 namespace hid {
 
+enum class RemoteLayout : uint8_t {
+  Media = 0,
+  Workflows = 1,
+};
+
 struct RemoteInput {
   bool happy = false;
   bool idle = false;
@@ -15,6 +20,7 @@ struct RemoteInput {
 
 struct RemoteOutput {
   ConsumerKey key = ConsumerKey::None;
+  uint8_t workflowSlot = 0;
   bool enter = false;
   bool exit = false;
   bool advanceScene = false;
@@ -27,6 +33,8 @@ class RemoteMode {
   static constexpr uint32_t kTimeoutMs = 60000;
 
   bool active() const { return active_; }
+  RemoteLayout layout() const { return layout_; }
+  void setLayout(RemoteLayout layout) { layout_ = layout; }
 
   template <typename Events>
   RemoteOutput update(const Events& events, bool hidConnected, uint32_t now, bool inEgg = false) {
@@ -72,14 +80,22 @@ class RemoteMode {
 
     if (events.happy) {
       lastButtonAt_ = now;
-      out.key = ConsumerKey::PlayPause;
+      if (layout_ == RemoteLayout::Workflows) {
+        out.workflowSlot = 1;
+      } else {
+        out.key = ConsumerKey::PlayPause;
+      }
       out.consumed = true;
       return out;
     }
 
     if (events.idle) {
       lastButtonAt_ = now;
-      out.key = ConsumerKey::Next;
+      if (layout_ == RemoteLayout::Workflows) {
+        out.workflowSlot = 2;
+      } else {
+        out.key = ConsumerKey::Next;
+      }
       out.consumed = true;
       return out;
     }
@@ -93,6 +109,7 @@ class RemoteMode {
 
  private:
   bool active_ = false;
+  RemoteLayout layout_ = RemoteLayout::Media;
   uint32_t lastButtonAt_ = 0;
 };
 
