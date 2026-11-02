@@ -67,17 +67,19 @@ def background():
  return im
 # Use ONE upright reference for every frame; never interpolate mismatched AI poses.
 import math
-source=Image.open(ROOT/'assets/source/xuna-emotion-sheet-v2.png').convert('RGBA')
-cell=source.crop((0,0,source.width//4,source.height//4))
-cell.putalpha(cell.getchannel('A').point(lambda a:255 if a>=128 else 0))
-cut=cell.crop(cell.getbbox())
-cut=cut.resize((62,53),Image.Resampling.NEAREST)
-base=Image.new('RGBA',(SW,SH));base.alpha_composite(cut,(17,13))
+from generate_color_theme_sprites import (
+    THEMES_CFG,
+    EYE_WHITE,
+    extract_clean_role_grid,
+    build_base_sprite_for_roles,
+)
+DEFAULT_ROLES = next(t['roles'] for t in THEMES_CFG['themes'] if t.get('isDefault'))
+base = build_base_sprite_for_roles(extract_clean_role_grid(), DEFAULT_ROLES)
 # Fixed feet and lower body. Only the upper body breathes, by at most two pixels.
 FRAMES_PER_STATE=32
 STEP_MS=100
 frames=[]
-ink='#161516';white='#fff7e9';skin='#ee7837'
+ink=DEFAULT_ROLES['outline'];white=EYE_WHITE.lower();skin=DEFAULT_ROLES['hair']
 for emotion in range(4):
  for step in range(FRAMES_PER_STATE):
   phase=step/FRAMES_PER_STATE

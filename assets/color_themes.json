@@ -1,0 +1,126 @@
+{
+  "version": 1,
+  "defaultThemeId": "green_edition",
+  "themes": [
+    {
+      "id": "green_edition",
+      "index": 1,
+      "code": "theme_01",
+      "name": "Green Edition",
+      "nameVi": "Xanh Nguyên Bản",
+      "tagline": "Fresh · Vibrant · Original",
+      "isDefault": true,
+      "accentParticle": "rays",
+      "roles": {
+        "highlight": "#EAF7C9",
+        "hair": "#B7E17D",
+        "body": "#8FB06B",
+        "shadow": "#5F7F52",
+        "outline": "#1E1E1E"
+      }
+    },
+    {
+      "id": "forest_mint",
+      "index": 2,
+      "code": "theme_02",
+      "name": "Forest Mint",
+      "nameVi": "Bạc Hà Rừng Xanh",
+      "tagline": "Fresh · Calm · Natural",
+      "isDefault": false,
+      "accentParticle": "rays",
+      "roles": {
+        "highlight": "#D5E3A2",
+        "hair": "#B1CA80",
+        "body": "#86A668",
+        "shadow": "#5F7D50",
+        "outline": "#28322A"
+      }
+    },
+    {
+      "id": "seafoam",
+      "index": 3,
+      "code": "theme_03",
+      "name": "Seafoam",
+      "nameVi": "Bọt Biển Mơ Màng",
+      "tagline": "Cool · Smart · Dreamy",
+      "isDefault": false,
+      "accentParticle": "rays",
+      "roles": {
+        "highlight": "#C5E2DD",
+        "hair": "#91C9C0",
+        "body": "#6EACA8",
+        "shadow": "#496F77",
+        "outline": "#263742"
+      }
+    },
+    {
+      "id": "lavender_dream",
+      "index": 4,
+      "code": "theme_04",
+      "name": "Lavender Dream",
+      "nameVi": "Oải Hương Huyền Bí",
+      "tagline": "Calm · Mysterious · Cozy",
+      "isDefault": false,
+      "accentParticle": "sparkle",
+      "roles": {
+        "highlight": "#DCD3EE",
+        "hair": "#C0B4DF",
+        "body": "#A191C7",
+        "shadow": "#6C5F90",
+        "outline": "#342E46"
+      }
+    },
+    {
+      "id": "sunny_gold",
+      "index": 5,
+      "code": "theme_05",
+      "name": "Sunny Gold",
+      "nameVi": "Nắng Vàng Rực Rỡ",
+      "tagline": "Warm · Cheerful · Energetic",
+      "isDefault": false,
+      "accentParticle": "rays",
+      "roles": {
+        "highlight": "#F5DEB2",
+        "hair": "#F7CE8A",
+        "body": "#EDB264",
+        "shadow": "#CB8348",
+        "outline": "#6D412F"
+      }
+    },
+    {
+      "id": "sky_blue",
+      "index": 6,
+      "code": "theme_06",
+      "name": "Sky Blue",
+      "nameVi": "Mây Trời Bình Yên",
+      "tagline": "Pure · Peaceful · Kind",
+      "isDefault": false,
+      "accentParticle": "rays",
+      "roles": {
+        "highlight": "#B9D6F4",
+        "hair": "#94BDE9",
+        "body": "#71A0D6",
+        "shadow": "#4B6A95",
+        "outline": "#2D3850"
+      }
+    },
+    {
+      "id": "berry_candy",
+      "index": 7,
+      "code": "theme_07",
+      "name": "Berry Candy",
+      "nameVi": "Kẹo Dâu Ngọt Ngào",
+      "tagline": "Sweet · Playful · Lovely",
+      "isDefault": false,
+      "accentParticle": "heart",
+      "roles": {
+        "highlight": "#F9C1C6",
+        "hair": "#F1AAB0",
+        "body": "#D8858D",
+        "shadow": "#A1565E",
+        "outline": "#4F2D35"
+      }
+    }
+  ]
+}
+

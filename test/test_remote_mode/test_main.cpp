@@ -263,6 +263,37 @@ void sym3_epigenetic_palette_room_props_and_rhythm_tricks_work() {
   const uint16_t midPixel = uint16_t((16u << 11) | (32u << 5) | 16u);
   TEST_ASSERT_NOT_EQUAL(midPixel, EpigeneticPalette::applyRgb565(midPixel, EpigeneticTint::CyanMint));
 
+  // Official 7 XUNA Color Themes remap all 5 canonical roles (highlight, hair, body, shadow, outline).
+  for (uint8_t idx = 0; idx < kXunaColorThemeCount; ++idx) {
+    const auto theme = static_cast<XunaColorThemeId>(idx);
+    const XunaColorThemeRoles roles = XunaThemePalette::rolesFor(theme);
+    TEST_ASSERT_EQUAL_HEX16(roles.highlight,
+                            XunaThemePalette::applyThemeRgb565(XunaThemePalette::kDefaultHighlight, theme));
+    TEST_ASSERT_EQUAL_HEX16(roles.hair,
+                            XunaThemePalette::applyThemeRgb565(XunaThemePalette::kDefaultHair, theme));
+    TEST_ASSERT_EQUAL_HEX16(roles.body,
+                            XunaThemePalette::applyThemeRgb565(XunaThemePalette::kDefaultBody, theme));
+    TEST_ASSERT_EQUAL_HEX16(roles.shadow,
+                            XunaThemePalette::applyThemeRgb565(XunaThemePalette::kDefaultShadow, theme));
+    TEST_ASSERT_EQUAL_HEX16(roles.outline,
+                            XunaThemePalette::applyThemeRgb565(XunaThemePalette::kDefaultOutline, theme));
+  }
+  TEST_ASSERT_EQUAL_UINT8(uint8_t(ThemeAccentParticle::Sparkle),
+                          uint8_t(XunaThemePalette::particleFor(XunaColorThemeId::LavenderDream)));
+  TEST_ASSERT_EQUAL_UINT8(uint8_t(ThemeAccentParticle::Heart),
+                          uint8_t(XunaThemePalette::particleFor(XunaColorThemeId::BerryCandy)));
+  TEST_ASSERT_EQUAL_UINT8(uint8_t(XunaColorThemeId::BerryCandy),
+                          uint8_t(XunaThemePalette::autoThemeForPersonality(120, 120, 180, 120)));
+  TEST_ASSERT_EQUAL_UINT8(uint8_t(XunaColorThemeId::SunnyGold),
+                          uint8_t(XunaThemePalette::autoThemeForPersonality(120, 190, 120, 120)));
+  TEST_ASSERT_EQUAL_UINT8(uint8_t(XunaColorThemeId::Seafoam),
+                          uint8_t(XunaThemePalette::autoThemeForPersonality(185, 120, 120, 120)));
+  TEST_ASSERT_EQUAL_UINT8(uint8_t(XunaColorThemeId::LavenderDream),
+                          uint8_t(XunaThemePalette::autoThemeForPersonality(120, 120, 120, 120, true, false)));
+  TEST_ASSERT_EQUAL_HEX16(
+      XunaThemePalette::rolesFor(XunaColorThemeId::BerryCandy).highlight,
+      SymbioticRoomProps::colorFor(RoomPropKind::FocusLamp, XunaColorThemeId::BerryCandy));
+
   // Symbiotic Room micro-props return non-zero bitmasks.
   TEST_ASSERT_NOT_EQUAL(0, SymbioticRoomProps::bitmaskRow(RoomPropKind::FocusLamp, 2));
   TEST_ASSERT_NOT_EQUAL(0, SymbioticRoomProps::bitmaskRow(RoomPropKind::DreamBubble, 1));

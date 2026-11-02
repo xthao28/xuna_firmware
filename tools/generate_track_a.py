@@ -24,8 +24,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SW, SH, FRAMES = 96, 72, 16
 FEET_ROW = 58          # rows >= 58 are the legs/feet (fixed in the base frames)
 TOP = 13               # first row of the hair in the neutral pose
-INK, WHITE, SKIN = '#161516', '#fff7e9', '#ee7837'
-TONGUE = '#a94324'
+INK, WHITE, SKIN = '#1E1E1E', '#fff7e9', '#B7E17D'
+TONGUE = '#5F7F52'
 EYES = (34, 54)        # left x of each eye box (generate_pet_scene.py)
 TRANSPARENT = 0xF81F
 
