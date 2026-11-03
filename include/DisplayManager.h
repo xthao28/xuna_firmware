@@ -16,6 +16,12 @@ class DisplayManager {
   void setBackdrop(Backdrop backdrop){backdrop_=backdrop;}
   void setEpigeneticTint(EpigeneticTint tint){if(tint_!=tint){tint_=tint;lastFrame_=255;}}
   EpigeneticTint epigeneticTint() const {return tint_;}
+  // 0 = Auto (Epigenetic tint), 1..7 = explicit Theme 01..07 override from companion app.
+  void setColorThemeOverride(uint8_t code){
+    const uint8_t clamped=code<=7?code:0;
+    if(colorThemeCode_!=clamped){colorThemeCode_=clamped;lastFrame_=255;windowValid_=false;}
+  }
+  uint8_t colorThemeOverride() const {return colorThemeCode_;}
   void setRoomProp(RoomPropKind prop){if(roomProp_!=prop){roomProp_=prop;windowValid_=false;}}
   RoomPropKind roomProp() const {return roomProp_;}
   void showEffect(EffectKind kind,uint32_t now){effect_.start(kind,now);}
@@ -76,6 +82,7 @@ class DisplayManager {
   WindowWeather weather_;ReactionEffect effect_;
   Backdrop backdrop_=Backdrop::Day,drawnBackdrop_=Backdrop::Day;
   EpigeneticTint tint_=EpigeneticTint::Original;
+  uint8_t colorThemeCode_=0;
   RoomPropKind roomProp_=RoomPropKind::None;
   bool windowValid_=true;
   uint16_t* card_=nullptr; // PSRAM, full screen

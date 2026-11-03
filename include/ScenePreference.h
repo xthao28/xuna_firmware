@@ -50,5 +50,19 @@ class ScenePreference {
     prefs.end();
     return ok;
   }
+  uint8_t loadColorTheme() {
+    Preferences prefs;
+    if (!prefs.begin("xuna_ui", true)) return 0;
+    const uint8_t value = prefs.getUChar("theme", 0);
+    prefs.end();
+    return value <= 7 ? value : 0;
+  }
+  bool saveColorTheme(uint8_t code) {
+    Preferences prefs;
+    if (!prefs.begin("xuna_ui", false)) return false;
+    const bool ok = prefs.putUChar("theme", code <= 7 ? code : 0) == 1;
+    prefs.end();
+    return ok;
+  }
 };
 }

@@ -159,12 +159,14 @@ void setup() {
   sceneMode = scenePreference.load();
   const auto savedBrightness = scenePreference.loadBrightness();
   const bool savedScreenSleep = scenePreference.loadScreenSleep();
+  const uint8_t savedColorTheme = scenePreference.loadColorTheme();
   display.setBrightnessPreset(savedBrightness);
+  display.setColorThemeOverride(savedColorTheme);
   pacer.setSleepEnabled(savedScreenSleep);
   displayReady = display.begin();
-  Serial.printf("scene_mode=%s brightness=%u screen_sleep=%u\n",
+  Serial.printf("scene_mode=%s brightness=%u screen_sleep=%u color_theme=%u\n",
                 sceneName(sceneMode), unsigned(static_cast<uint8_t>(savedBrightness)),
-                savedScreenSleep ? 1u : 0u);
+                savedScreenSleep ? 1u : 0u, unsigned(savedColorTheme));
   Serial.println(displayReady ? "Display driver initialized; confirm LCD visually." :
                                 "ERROR: display dimensions/buffer allocation failed; input/logging continue.");
   const uint32_t now = millis();
@@ -253,17 +255,20 @@ void loop() {
   persistReady = lifeReady && identity.state() == xuna::IdentityState::Ready;
   readyIdentity = identity.state()==xuna::IdentityState::Ready ? &identity.record() : nullptr;
   {
-    uint8_t bright=0;bool sleepOn=true;
-    if(adapter.takeDisplaySettings(bright,sleepOn)){
+    uint8_t bright=0,colorTheme=0;bool sleepOn=true;
+    if(adapter.takeDisplaySettings(bright,sleepOn,colorTheme)){
       const auto preset=xuna::brightnessPresetFrom(bright);
       display.setBrightnessPreset(preset);
+      display.setColorThemeOverride(colorTheme);
       pacer.setSleepEnabled(sleepOn);
       const bool savedB=scenePreference.saveBrightness(preset);
       const bool savedS=scenePreference.saveScreenSleep(sleepOn);
+      const bool savedT=scenePreference.saveColorTheme(colorTheme);
       pacer.touch(now);
       if(displayReady)display.wake(now,animation.state());
-      Serial.printf("display_settings brightness=%u screen_sleep=%u saved=%u\n",
-                    unsigned(static_cast<uint8_t>(preset)),sleepOn?1u:0u,(savedB&&savedS)?1u:0u);
+      Serial.printf("display_settings brightness=%u screen_sleep=%u color_theme=%u saved=%u\n",
+                    unsigned(static_cast<uint8_t>(preset)),sleepOn?1u:0u,unsigned(colorTheme),
+                    (savedB&&savedS&&savedT)?1u:0u);
     }
   }
 #ifdef XUNA_NET

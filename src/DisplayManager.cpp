@@ -218,9 +218,14 @@ void DisplayManager::update(uint32_t now, PetState state) {
     uint16_t *dst = region_ + y * scene::kSpriteWidth;
     for (unsigned x = 0; x < scene::kSpriteWidth; ++x) {
       const uint16_t color = src[x];
-      dst[x] = color == scene::kTransparent
-                   ? bg[x]
-                   : EpigeneticPalette::applyRgb565(color, tint_);
+      if (color == scene::kTransparent) {
+        dst[x] = bg[x];
+      } else if (colorThemeCode_ >= 1 && colorThemeCode_ <= 7) {
+        dst[x] = XunaThemePalette::applyThemeRgb565(
+            color, static_cast<XunaColorThemeId>(colorThemeCode_ - 1));
+      } else {
+        dst[x] = EpigeneticPalette::applyRgb565(color, tint_);
+      }
     }
   }
   lcd_.pushImage(scene::kAnchorX, scene::kAnchorY, scene::kSpriteWidth,
@@ -263,7 +268,12 @@ void DisplayManager::drawWindow() {
     }
   }
   if (roomProp_ != RoomPropKind::None) {
-    const uint16_t propColor = SymbioticRoomProps::colorFor(roomProp_);
+    const XunaColorThemeId activeTheme =
+        (colorThemeCode_ >= 1 && colorThemeCode_ <= 7)
+            ? static_cast<XunaColorThemeId>(colorThemeCode_ - 1)
+            : EpigeneticPalette::toColorTheme(tint_);
+    const uint16_t propColor =
+        SymbioticRoomProps::colorFor(roomProp_, activeTheme);
     const int baseX = scene::kGlassX + scene::kGlassW - 10;
     const int baseY = scene::kGlassY + 2;
     for (uint8_t r = 0; r < SymbioticRoomProps::kPropSize; ++r) {

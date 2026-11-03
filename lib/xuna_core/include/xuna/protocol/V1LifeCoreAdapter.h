@@ -356,14 +356,21 @@ class V1LifeCoreAdapter {
   const ClockModel& clock() const { return core_.clock(); }
   uint64_t monoNow() const { return core_.mono64(); }
 
-  // Power Phase 2: returns true once per accepted opcode 11 DisplaySettings command.
+  // Power Phase 2 & THEME-4: returns true once per accepted opcode 11 DisplaySettings command.
+  // colorThemeCode: 0 = Auto (epigenetic), 1..7 = Theme 01..07.
   bool takeDisplaySettings(uint8_t& brightness, bool& screenSleep) {
+    uint8_t unusedTheme = 0;
+    return takeDisplaySettings(brightness, screenSleep, unusedTheme);
+  }
+  bool takeDisplaySettings(uint8_t& brightness, bool& screenSleep, uint8_t& colorThemeCode) {
     if (!displaySettingsPending_) return false;
     displaySettingsPending_ = false;
     brightness = displayBrightness_;
     screenSleep = displayScreenSleep_;
+    colorThemeCode = displayColorTheme_;
     return true;
   }
+  uint8_t displayColorTheme() const { return displayColorTheme_; }
 
   // UDC-2: returns true once per accepted opcode 12 HidConsumer command to show
   // the expression-only speech bubble on the board.
@@ -468,7 +475,11 @@ class V1LifeCoreAdapter {
       case 11: {
         displaySettingsPending_ = true;
         displayBrightness_ = c.arg;
-        displayScreenSleep_ = c.source != 0;
+        displayScreenSleep_ = (c.source & 0x0F) != 0;
+        const uint8_t themeNibble = static_cast<uint8_t>(c.source >> 4);
+        if (themeNibble >= 1 && themeNibble <= 8) {
+          displayColorTheme_ = static_cast<uint8_t>(themeNibble - 1);
+        }
         return kOk;
       }
       case 12: {
@@ -540,6 +551,7 @@ class V1LifeCoreAdapter {
   bool displaySettingsPending_ = false;
   uint8_t displayBrightness_ = 1;
   bool displayScreenSleep_ = true;
+  uint8_t displayColorTheme_ = 0;
   IHidControl* hidControl_ = nullptr;
   hid::HidRateLimiter hidRateLimiter_;
   bool hidFeedbackPending_ = false;

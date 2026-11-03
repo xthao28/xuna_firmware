@@ -76,7 +76,7 @@ inline BleCommand parseCommand(const uint8_t* b,size_t n,
     else if((c.arg==5||c.arg==6)&&(c.slot2!=0||c.factKey==0))c.error=4;
     else if(c.arg==7&&(c.slot2>=5||c.slot2==c.slot||c.factKey==0))c.error=4;
   }
-  if(displaySettings&&(c.arg>2||c.source>1))c.error=4;
+  if(displaySettings&&(c.arg>2||(c.source&0x0F)>1||(c.source>>4)>8))c.error=4;
   if(hidConsumer&&(c.arg<1||c.arg>7||c.source<1||c.source>2))c.error=4;
   if(hidHosts){
     if(c.arg==1){if(c.source>3)c.error=4;}
