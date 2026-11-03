@@ -14,8 +14,34 @@ class DisplayManager {
   void update(uint32_t now,PetState state);
   // Window scene (redrawn only on change) and the effect above XUNA's head.
   void setBackdrop(Backdrop backdrop){backdrop_=backdrop;}
-  void setEpigeneticTint(EpigeneticTint tint){if(tint_!=tint){tint_=tint;lastFrame_=255;}}
+  void setEpigeneticTint(EpigeneticTint tint){
+    if(tint_!=tint){
+      tint_=tint;
+      if(!colorThemeExplicit_){
+        colorTheme_=EpigeneticPalette::toColorTheme(tint_);
+        windowValid_=false;
+      }
+      lastFrame_=255;
+    }
+  }
   EpigeneticTint epigeneticTint() const {return tint_;}
+  // 0 = Auto (follows epigeneticTint), 1..7 = explicit Theme 01..07.
+  void setColorThemeCode(uint8_t themeCode){
+    const bool explicitMode=(themeCode>=1&&themeCode<=7);
+    const XunaColorThemeId nextTheme=explicitMode
+        ? XunaThemePalette::fromIndex(static_cast<uint8_t>(themeCode-1))
+        : EpigeneticPalette::toColorTheme(tint_);
+    if(colorThemeExplicit_!=explicitMode||colorTheme_!=nextTheme){
+      colorThemeExplicit_=explicitMode;
+      colorTheme_=nextTheme;
+      windowValid_=false;
+      lastFrame_=255;
+    }
+  }
+  uint8_t colorThemeCode() const {
+    return colorThemeExplicit_ ? static_cast<uint8_t>(static_cast<uint8_t>(colorTheme_)+1) : 0;
+  }
+  XunaColorThemeId activeColorTheme() const {return colorTheme_;}
   void setRoomProp(RoomPropKind prop){if(roomProp_!=prop){roomProp_=prop;windowValid_=false;}}
   RoomPropKind roomProp() const {return roomProp_;}
   void showEffect(EffectKind kind,uint32_t now){effect_.start(kind,now);}
@@ -76,6 +102,8 @@ class DisplayManager {
   WindowWeather weather_;ReactionEffect effect_;
   Backdrop backdrop_=Backdrop::Day,drawnBackdrop_=Backdrop::Day;
   EpigeneticTint tint_=EpigeneticTint::Original;
+  XunaColorThemeId colorTheme_=XunaColorThemeId::GreenEdition;
+  bool colorThemeExplicit_=false;
   RoomPropKind roomProp_=RoomPropKind::None;
   bool windowValid_=true;
   uint16_t* card_=nullptr; // PSRAM, full screen

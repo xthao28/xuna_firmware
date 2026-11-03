@@ -671,12 +671,24 @@ void enhanced_display_settings_command_and_validation() {
   // Consumed once:
   TEST_ASSERT_FALSE(rig.adapter.takeDisplaySettings(brightness, screenSleep));
 
+  // Valid opcode 11 with colorThemeCode = 4 (Lavender Dream -> nibble = 5 -> 0x51):
+  bool hasColorTheme = false;
+  uint8_t colorThemeCode = 99;
+  TEST_ASSERT_EQUAL_UINT8(0, rig.send("01 0b 85 00 00 00 01 51", 2001, id));
+  TEST_ASSERT_TRUE(rig.adapter.takeDisplaySettings(brightness, screenSleep, hasColorTheme, colorThemeCode));
+  TEST_ASSERT_EQUAL_UINT8(1, brightness);
+  TEST_ASSERT_TRUE(screenSleep);
+  TEST_ASSERT_TRUE(hasColorTheme);
+  TEST_ASSERT_EQUAL_UINT8(4, colorThemeCode);
+
   // Invalid brightness (3) -> invalid_argument (4)
-  TEST_ASSERT_EQUAL_UINT8(4, rig.send("01 0b 81 00 00 00 03 01", 2001, id));
+  TEST_ASSERT_EQUAL_UINT8(4, rig.send("01 0b 81 00 00 00 03 01", 2002, id));
   // Invalid screenSleep (2) -> invalid_argument (4)
-  TEST_ASSERT_EQUAL_UINT8(4, rig.send("01 0b 82 00 00 00 01 02", 2002, id));
+  TEST_ASSERT_EQUAL_UINT8(4, rig.send("01 0b 82 00 00 00 01 02", 2003, id));
+  // Invalid colorTheme nibble (9 -> 0x90) -> invalid_argument (4)
+  TEST_ASSERT_EQUAL_UINT8(4, rig.send("01 0b 86 00 00 00 01 90", 2004, id));
   // Invalid length (12 bytes) -> invalid_length (2)
-  TEST_ASSERT_EQUAL_UINT8(2, rig.send("01 0b 83 00 00 00 01 01 00 00 00 00", 2003, id));
+  TEST_ASSERT_EQUAL_UINT8(2, rig.send("01 0b 83 00 00 00 01 01 00 00 00 00", 2005, id));
 }
 
 void baseline_rejects_display_settings() {

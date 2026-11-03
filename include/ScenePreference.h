@@ -50,5 +50,21 @@ class ScenePreference {
     prefs.end();
     return ok;
   }
+  // 0 = Auto (epigenetic temperament palette), 1..7 = Theme 01..07.
+  uint8_t loadColorTheme() {
+    Preferences prefs;
+    if (!prefs.begin("xuna_ui", true)) return 0;
+    const uint8_t value = prefs.getUChar("theme", 0);
+    prefs.end();
+    return value <= 7 ? value : 0;
+  }
+  bool saveColorTheme(uint8_t themeCode) {
+    Preferences prefs;
+    if (!prefs.begin("xuna_ui", false)) return false;
+    const uint8_t clamped = themeCode <= 7 ? themeCode : 0;
+    const bool ok = prefs.putUChar("theme", clamped) == 1;
+    prefs.end();
+    return ok;
+  }
 };
 }

@@ -220,7 +220,7 @@ void DisplayManager::update(uint32_t now, PetState state) {
       const uint16_t color = src[x];
       dst[x] = color == scene::kTransparent
                    ? bg[x]
-                   : EpigeneticPalette::applyRgb565(color, tint_);
+                   : XunaThemePalette::applyThemeRgb565(color, colorTheme_);
     }
   }
   lcd_.pushImage(scene::kAnchorX, scene::kAnchorY, scene::kSpriteWidth,
@@ -263,7 +263,7 @@ void DisplayManager::drawWindow() {
     }
   }
   if (roomProp_ != RoomPropKind::None) {
-    const uint16_t propColor = SymbioticRoomProps::colorFor(roomProp_);
+    const uint16_t propColor = SymbioticRoomProps::colorFor(roomProp_, colorTheme_);
     const int baseX = scene::kGlassX + scene::kGlassW - 10;
     const int baseY = scene::kGlassY + 2;
     for (uint8_t r = 0; r < SymbioticRoomProps::kPropSize; ++r) {

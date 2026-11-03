@@ -358,10 +358,20 @@ class V1LifeCoreAdapter {
 
   // Power Phase 2: returns true once per accepted opcode 11 DisplaySettings command.
   bool takeDisplaySettings(uint8_t& brightness, bool& screenSleep) {
+    bool hasTheme = false;
+    uint8_t themeCode = 0;
+    return takeDisplaySettings(brightness, screenSleep, hasTheme, themeCode);
+  }
+
+  bool takeDisplaySettings(uint8_t& brightness, bool& screenSleep,
+                           bool& hasColorTheme, uint8_t& colorThemeCode) {
     if (!displaySettingsPending_) return false;
     displaySettingsPending_ = false;
     brightness = displayBrightness_;
     screenSleep = displayScreenSleep_;
+    hasColorTheme = displayHasColorTheme_;
+    colorThemeCode = displayColorThemeCode_;
+    displayHasColorTheme_ = false;
     return true;
   }
 
@@ -468,7 +478,14 @@ class V1LifeCoreAdapter {
       case 11: {
         displaySettingsPending_ = true;
         displayBrightness_ = c.arg;
-        displayScreenSleep_ = c.source != 0;
+        displayScreenSleep_ = (c.source & 0x0f) != 0;
+        const uint8_t themeNibble = static_cast<uint8_t>(c.source >> 4);
+        if (themeNibble >= 1 && themeNibble <= 8) {
+          displayHasColorTheme_ = true;
+          displayColorThemeCode_ = static_cast<uint8_t>(themeNibble - 1);
+        } else {
+          displayHasColorTheme_ = false;
+        }
         return kOk;
       }
       case 12: {
@@ -540,6 +557,8 @@ class V1LifeCoreAdapter {
   bool displaySettingsPending_ = false;
   uint8_t displayBrightness_ = 1;
   bool displayScreenSleep_ = true;
+  bool displayHasColorTheme_ = false;
+  uint8_t displayColorThemeCode_ = 0;
   IHidControl* hidControl_ = nullptr;
   hid::HidRateLimiter hidRateLimiter_;
   bool hidFeedbackPending_ = false;
